@@ -1,0 +1,27 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gauntlet Pre-auth Report UI (Build Order #3, PRD \u00a78.5) -- paste a public URL, no account required, get ranked Opportunity Cards. Async job pattern: POST /api/scans creates a job and returns immediately; the pipeline runs via Next.js after() so it keeps going past the response (PRD \u00a79's \"Scan API / Job Manager... return status\").",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gauntlet/core": "*",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "pg": "^8.13.1",
+    "@vercel/functions": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,8 +1,11 @@
 node_modules/
 dist/
+.next/
 *.db
 *.db-journal
 .env
+.env.local
+.env*.local
 /scans/
 # TLS interception CA certs exported for NODE_EXTRA_CA_CERTS -- these are
 # specific to one machine's corporate security software (see README), not
