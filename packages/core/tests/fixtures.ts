@@ -1,4 +1,4 @@
-import type { EvidencePacket } from "../../src/core/evidence-packet.js";
+import type { EvidencePacket } from "../src/evidence-packet.js";
 
 /** Minimal, contract-valid Evidence Packet fixture shared by scientist/reviewer tests. */
 export function fakeEvidencePacket(overrides: Partial<EvidencePacket> = {}): EvidencePacket {

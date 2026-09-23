@@ -15,5 +15,11 @@
     "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
     "no-console": "off"
   },
-  "ignorePatterns": ["dist", "node_modules"]
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    ".next",
+    "*.db",
+    "scans"
+  ]
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildEvidencePacket, type PageScanResult } from "../../src/core/normalizer.js";
-import { EvidencePacketSchema } from "../../src/core/evidence-packet.js";
-import type { PageExtraction } from "../../src/core/extractor.js";
+import { buildEvidencePacket, type PageScanResult } from "../src/normalizer.js";
+import { EvidencePacketSchema } from "../src/evidence-packet.js";
+import type { PageExtraction } from "../src/extractor.js";
 
 const FIXED_NOW = () => "2026-09-22T00:00:00.000Z";
 

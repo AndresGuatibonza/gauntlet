@@ -1,0 +1,26 @@
+{
+  "name": "@gauntlet/core",
+  "version": "0.1.0",
+  "description": "Gauntlet framework-agnostic pipeline: fetch -> discover -> extract -> normalize -> Evidence Packet -> Scientist/Reviewer (Claude API). No CLI or storage concerns live here -- those belong to consumers (packages/cli, apps/web).",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "cheerio": "^1.0.0",
+    "robots-parser": "^3.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "types": "./src/index.ts"
+}

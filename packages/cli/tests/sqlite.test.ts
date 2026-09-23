@@ -2,10 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openStore } from "../../src/store/sqlite.js";
-import type { EvidencePacket } from "../../src/core/evidence-packet.js";
-import type { OpportunityReport } from "../../src/core/opportunity-card.js";
-import type { ReviewRecord } from "../../src/core/reviewer.js";
+import { openStore } from "../src/store/sqlite.js";
+import type { EvidencePacket, OpportunityReport, ReviewRecord } from "@gauntlet/core";
 
 function samplePacket(overrides: Partial<EvidencePacket> = {}): EvidencePacket {
   return {

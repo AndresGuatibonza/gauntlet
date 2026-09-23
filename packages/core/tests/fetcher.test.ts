@@ -6,7 +6,7 @@ import {
   type HttpClient,
   type HttpResponse,
   type Clock,
-} from "../../src/core/fetcher.js";
+} from "../src/fetcher.js";
 
 function fakeHttpClient(responses: Record<string, HttpResponse | Error>): HttpClient {
   return {

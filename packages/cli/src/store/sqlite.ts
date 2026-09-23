@@ -4,14 +4,12 @@
  * Profiler's local-first, migration-tracked pattern.
  *
  * Migration SQL is kept inline (mirrored in
- * src/store/migrations/001_init.sql for human review) rather than read from
+ * packages/cli/src/store/migrations/001_init.sql for human review) rather than read from
  * disk at runtime, so the compiled/bundled CLI never depends on a migrations
  * folder shipping alongside dist/.
  */
 import Database from "better-sqlite3";
-import type { EvidencePacket } from "../core/evidence-packet.js";
-import type { OpportunityCard, OpportunityReport } from "../core/opportunity-card.js";
-import type { ReviewRecord } from "../core/reviewer.js";
+import type { EvidencePacket, OpportunityCard, OpportunityReport, ReviewRecord } from "@gauntlet/core";
 
 const MIGRATIONS: Array<{ name: string; sql: string }> = [
   {

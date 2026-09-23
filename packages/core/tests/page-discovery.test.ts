@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { discoverAndFetchPages } from "../../src/core/page-discovery.js";
-import type { PageFetcher, FetchResult } from "../../src/core/fetcher.js";
+import { discoverAndFetchPages } from "../src/page-discovery.js";
+import type { PageFetcher, FetchResult } from "../src/fetcher.js";
 
 function fakeFetcher(pages: Record<string, FetchResult>): PageFetcher {
   return {

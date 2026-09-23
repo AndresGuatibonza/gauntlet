@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { generateOpportunityReport, ScientistError } from "../../src/core/scientist.js";
-import { fakeLlmClient, LlmCallError } from "../../src/core/llm-client.js";
+import { generateOpportunityReport, ScientistError } from "../src/scientist.js";
+import { fakeLlmClient, LlmCallError } from "../src/llm-client.js";
 import { fakeEvidencePacket, fakeOpportunityCard } from "./fixtures.js";
 
 function validReportJson(cardOverrides: Array<Record<string, unknown>> = []) {

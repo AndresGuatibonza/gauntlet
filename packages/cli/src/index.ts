@@ -6,16 +6,23 @@ import {
   RobotsChecker,
   RateLimiter,
   PageFetcher,
-} from "../core/fetcher.js";
-import { discoverAndFetchPages, DEFAULT_MAX_PAGES } from "../core/page-discovery.js";
-import { extractPage } from "../core/extractor.js";
-import { buildEvidencePacket, type PageScanResult } from "../core/normalizer.js";
-import { EvidencePacketSchema } from "../core/evidence-packet.js";
-import { createAnthropicLlmClient, LlmCallError } from "../core/llm-client.js";
-import { generateOpportunityReport, ScientistError } from "../core/scientist.js";
-import { reviewOpportunityReport, ReviewerError, type ReviewRecord } from "../core/reviewer.js";
-import type { OpportunityCard, OpportunityReport } from "../core/opportunity-card.js";
-import { openStore } from "../store/sqlite.js";
+  discoverAndFetchPages,
+  DEFAULT_MAX_PAGES,
+  extractPage,
+  buildEvidencePacket,
+  type PageScanResult,
+  EvidencePacketSchema,
+  createAnthropicLlmClient,
+  LlmCallError,
+  generateOpportunityReport,
+  ScientistError,
+  reviewOpportunityReport,
+  ReviewerError,
+  type ReviewRecord,
+  type OpportunityCard,
+  type OpportunityReport,
+} from "@gauntlet/core";
+import { openStore } from "./store/sqlite.js";
 
 // Node 20.6+ built-in .env loader. Optional -- ANTHROPIC_API_KEY may also
 // already be set in the shell. Never throws if the file is absent; a

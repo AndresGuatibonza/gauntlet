@@ -1,0 +1,29 @@
+{
+  "name": "@gauntlet/cli",
+  "version": "0.1.0",
+  "description": "Gauntlet CLI -- local-first SQLite store plus the scan/analyze commands, built on @gauntlet/core.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "gauntlet": "./dist/index.cjs"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs --external:better-sqlite3 --external:@anthropic-ai/sdk",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@gauntlet/core": "*",
+    "better-sqlite3": "^11.3.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.5.0",
+    "esbuild": "^0.23.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}

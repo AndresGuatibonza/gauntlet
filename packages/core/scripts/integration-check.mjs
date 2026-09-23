@@ -1,8 +1,8 @@
-import { nodeHttpClient, RobotsChecker, RateLimiter, PageFetcher } from "../src/core/fetcher.ts";
-import { discoverAndFetchPages } from "../src/core/page-discovery.ts";
-import { extractPage } from "../src/core/extractor.ts";
-import { buildEvidencePacket } from "../src/core/normalizer.ts";
-import { EvidencePacketSchema } from "../src/core/evidence-packet.ts";
+import { nodeHttpClient, RobotsChecker, RateLimiter, PageFetcher } from "../src/fetcher.ts";
+import { discoverAndFetchPages } from "../src/page-discovery.ts";
+import { extractPage } from "../src/extractor.ts";
+import { buildEvidencePacket } from "../src/normalizer.ts";
+import { EvidencePacketSchema } from "../src/evidence-packet.ts";
 
 const url = "http://127.0.0.1:8734/";
 const robots = new RobotsChecker(nodeHttpClient);

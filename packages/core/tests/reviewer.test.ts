@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { reviewOpportunityReport, ReviewerError } from "../../src/core/reviewer.js";
-import { fakeLlmClient, LlmCallError } from "../../src/core/llm-client.js";
+import { reviewOpportunityReport, ReviewerError } from "../src/reviewer.js";
+import { fakeLlmClient, LlmCallError } from "../src/llm-client.js";
 import { fakeEvidencePacket, fakeOpportunityCard } from "./fixtures.js";
-import { computeRankScore, type OpportunityReport } from "../../src/core/opportunity-card.js";
+import { computeRankScore, type OpportunityReport } from "../src/opportunity-card.js";
 
 function threeCardReport(): OpportunityReport {
   const cards = [

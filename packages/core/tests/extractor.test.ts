@@ -8,7 +8,7 @@ import {
   extractPufferyEvidence,
   extractFormsEvidence,
   extractPage,
-} from "../../src/core/extractor.js";
+} from "../src/extractor.js";
 
 describe("extractPageTitle / extractFirstHeading", () => {
   it("extracts the title and first h1", () => {
