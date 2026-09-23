@@ -39,7 +39,20 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request." }, { status: 400 });
   }
 
-  const jobId = await createScanJob(parsed.data.url, parsed.data.category);
+  let jobId: string;
+  try {
+    jobId = await createScanJob(parsed.data.url, parsed.data.category);
+  } catch (err) {
+    // Most likely cause: DATABASE_URL misconfigured or the migration in
+    // lib/migrations/001_init.sql hasn't been applied yet -- surface the
+    // real message rather than letting this throw into Next's generic,
+    // unstructured 500 (which the frontend can still fall back to, but
+    // with no actionable detail).
+    return NextResponse.json(
+      { error: `Could not create scan job: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 },
+    );
+  }
 
   // Schedule the pipeline to run after this response is sent. If the
   // pipeline itself throws, runScanJob's own top-level catch writes

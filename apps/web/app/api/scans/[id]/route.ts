@@ -7,7 +7,15 @@ import { getScanJob } from "@/lib/store";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const { id } = await context.params;
-  const job = await getScanJob(id);
+  let job;
+  try {
+    job = await getScanJob(id);
+  } catch (err) {
+    return NextResponse.json(
+      { error: `Could not read scan job: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 },
+    );
+  }
   if (!job) {
     return NextResponse.json({ error: "No scan job with that id." }, { status: 404 });
   }
