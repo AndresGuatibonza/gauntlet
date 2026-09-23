@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../../src/store/sqlite.js";
 import type { EvidencePacket } from "../../src/core/evidence-packet.js";
+import type { OpportunityReport } from "../../src/core/opportunity-card.js";
+import type { ReviewRecord } from "../../src/core/reviewer.js";
 
 function samplePacket(overrides: Partial<EvidencePacket> = {}): EvidencePacket {
   return {
@@ -98,5 +100,61 @@ describe("sqlite store", () => {
     const loaded = store.getEvidencePacketById(999);
     store.close();
     expect(loaded).toBeUndefined();
+  });
+
+  it("round-trips a saved Opportunity Report plus its review records, in rank order", () => {
+    dir = mkdtempSync(join(tmpdir(), "gauntlet-test-"));
+    const store = openStore(join(dir, "test.db"));
+    const packetId = store.saveEvidencePacket(samplePacket());
+
+    const report: OpportunityReport = {
+      cards: [
+        {
+          title: "Best card",
+          observation: "obs",
+          problemStatement: "problem",
+          hypothesis: "hypothesis",
+          changeSurface: "ux",
+          experiment: {
+            control: "c",
+            variant: "v",
+            audience: "a",
+            primaryMetric: "m",
+            guardrails: "g",
+            stoppingRule: "s",
+          },
+          expectedImpact: { level: "high", rationale: "r", score: 3 },
+          effort: { level: "low", explanation: "e", score: 1 },
+          confidence: { level: "high", evidenceQualityScore: 3 },
+          missingEvidence: "none",
+          nextAction: "build_this",
+          evidenceRefs: ["E1"],
+          rankScore: 9,
+        },
+      ],
+    };
+    const reviewRecords: ReviewRecord[] = [
+      {
+        cardIndex: 0,
+        cardTitle: "Best card",
+        outrunsEvidence: false,
+        hasUnaddressedConfounder: false,
+        metricMatchesOutcome: true,
+        isFalsifiableAndSingleChange: true,
+        verdict: "pass",
+        rationale: "Fine.",
+      },
+    ];
+
+    const reportId = store.saveOpportunityReport(packetId, report, reviewRecords);
+    const loaded = store.getOpportunityReportById(reportId);
+    store.close();
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.packetId).toBe(packetId);
+    expect(loaded?.report.cards).toHaveLength(1);
+    expect(loaded?.report.cards[0]?.title).toBe("Best card");
+    expect(loaded?.reviewRecords).toHaveLength(1);
+    expect(loaded?.reviewRecords[0]?.verdict).toBe("pass");
   });
 });

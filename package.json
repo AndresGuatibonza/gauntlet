@@ -8,13 +8,14 @@
     "gauntlet": "./dist/cli/index.cjs"
   },
   "scripts": {
-    "build": "esbuild src/cli/index.ts --bundle --platform=node --format=cjs --outfile=dist/cli/index.cjs --external:better-sqlite3",
+    "build": "esbuild src/cli/index.ts --bundle --platform=node --format=cjs --outfile=dist/cli/index.cjs --external:better-sqlite3 --external:@anthropic-ai/sdk",
     "dev": "tsx src/cli/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests",
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
     "better-sqlite3": "^11.3.0",
     "cheerio": "^1.0.0",
     "commander": "^12.1.0",
@@ -31,11 +32,5 @@
     "tsx": "^4.19.0",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
-  },
-  "allowScripts": {
-    "better-sqlite3@11.10.0": true,
-    "esbuild@0.23.1": true,
-    "esbuild@0.21.5": true,
-    "esbuild@0.28.2": true
   }
 }

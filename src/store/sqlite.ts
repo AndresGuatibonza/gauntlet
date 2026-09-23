@@ -10,6 +10,8 @@
  */
 import Database from "better-sqlite3";
 import type { EvidencePacket } from "../core/evidence-packet.js";
+import type { OpportunityCard, OpportunityReport } from "../core/opportunity-card.js";
+import type { ReviewRecord } from "../core/reviewer.js";
 
 const MIGRATIONS: Array<{ name: string; sql: string }> = [
   {
@@ -41,12 +43,62 @@ CREATE INDEX IF NOT EXISTS idx_evidence_items_packet ON evidence_items(packet_id
 CREATE INDEX IF NOT EXISTS idx_evidence_items_type ON evidence_items(evidence_type);
 `,
   },
+  {
+    // Build Order #2: Product Scientist v0 + Reviewer/Critic (PRD §8.3/§8.4).
+    // One row per generated report (tied to the packet it was generated
+    // from) plus one row per surviving Opportunity Card, so a report can be
+    // re-displayed without re-calling the Claude API. review_records is kept
+    // as its own table -- "for debugging and future experiment memory"
+    // (PRD §8.4) -- separately from the cards, since a dropped card still
+    // needs to be inspectable even though it does not appear in cards.
+    name: "002_opportunity_reports",
+    sql: `
+CREATE TABLE IF NOT EXISTS opportunity_reports (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  packet_id       INTEGER NOT NULL REFERENCES evidence_packets(id),
+  generated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_opportunity_reports_packet ON opportunity_reports(packet_id);
+
+CREATE TABLE IF NOT EXISTS opportunity_cards (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_id       INTEGER NOT NULL REFERENCES opportunity_reports(id),
+  rank_position   INTEGER NOT NULL,
+  next_action     TEXT NOT NULL,
+  rank_score      REAL,
+  card_json       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_opportunity_cards_report ON opportunity_cards(report_id);
+
+CREATE TABLE IF NOT EXISTS review_records (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_id       INTEGER NOT NULL REFERENCES opportunity_reports(id),
+  card_index      INTEGER NOT NULL,
+  verdict         TEXT NOT NULL,
+  record_json     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_records_report ON review_records(report_id);
+`,
+  },
 ];
+
+export interface SavedOpportunityReport {
+  id: number;
+  packetId: number;
+  generatedAt: string;
+  report: OpportunityReport;
+  reviewRecords: ReviewRecord[];
+}
 
 export interface GauntletStore {
   saveEvidencePacket(packet: EvidencePacket): number;
   getEvidencePacketById(id: number): EvidencePacket | undefined;
   listEvidencePackets(): Array<{ id: number; url: string; productName: string; scannedAt: string }>;
+  saveOpportunityReport(packetId: number, report: OpportunityReport, reviewRecords: ReviewRecord[]): number;
+  getOpportunityReportById(id: number): SavedOpportunityReport | undefined;
   close(): void;
 }
 
@@ -89,6 +141,27 @@ export function openStore(path: string): GauntletStore {
     "SELECT id, url, product_name AS productName, scanned_at AS scannedAt FROM evidence_packets ORDER BY id DESC",
   );
 
+  const insertReport = db.prepare(
+    `INSERT INTO opportunity_reports (packet_id, generated_at) VALUES (?, ?)`,
+  );
+  const insertCard = db.prepare(
+    `INSERT INTO opportunity_cards (report_id, rank_position, next_action, rank_score, card_json)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const insertReviewRecord = db.prepare(
+    `INSERT INTO review_records (report_id, card_index, verdict, record_json)
+     VALUES (?, ?, ?, ?)`,
+  );
+  const selectReportById = db.prepare(
+    "SELECT id, packet_id AS packetId, generated_at AS generatedAt FROM opportunity_reports WHERE id = ?",
+  );
+  const selectCardsByReport = db.prepare(
+    "SELECT card_json FROM opportunity_cards WHERE report_id = ? ORDER BY rank_position ASC",
+  );
+  const selectReviewRecordsByReport = db.prepare(
+    "SELECT record_json FROM review_records WHERE report_id = ? ORDER BY card_index ASC",
+  );
+
   return {
     saveEvidencePacket(packet: EvidencePacket): number {
       const result = db.transaction(() => {
@@ -124,6 +197,35 @@ export function openStore(path: string): GauntletStore {
 
     listEvidencePackets() {
       return selectAllPackets.all() as Array<{ id: number; url: string; productName: string; scannedAt: string }>;
+    },
+
+    saveOpportunityReport(packetId: number, report: OpportunityReport, reviewRecords: ReviewRecord[]): number {
+      return db.transaction(() => {
+        const generatedAt = new Date().toISOString();
+        const insertResult = insertReport.run(packetId, generatedAt);
+        const reportId = Number(insertResult.lastInsertRowid);
+        report.cards.forEach((card: OpportunityCard, index: number) => {
+          insertCard.run(reportId, index, card.nextAction, card.rankScore ?? null, JSON.stringify(card));
+        });
+        reviewRecords.forEach((record) => {
+          insertReviewRecord.run(reportId, record.cardIndex, record.verdict, JSON.stringify(record));
+        });
+        return reportId;
+      })();
+    },
+
+    getOpportunityReportById(id: number): SavedOpportunityReport | undefined {
+      const row = selectReportById.get(id) as { id: number; packetId: number; generatedAt: string } | undefined;
+      if (!row) return undefined;
+      const cardRows = selectCardsByReport.all(id) as Array<{ card_json: string }>;
+      const reviewRows = selectReviewRecordsByReport.all(id) as Array<{ record_json: string }>;
+      return {
+        id: row.id,
+        packetId: row.packetId,
+        generatedAt: row.generatedAt,
+        report: { cards: cardRows.map((r) => JSON.parse(r.card_json) as OpportunityCard) },
+        reviewRecords: reviewRows.map((r) => JSON.parse(r.record_json) as ReviewRecord),
+      };
     },
 
     close(): void {

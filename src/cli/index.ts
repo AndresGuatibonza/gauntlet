@@ -11,13 +11,30 @@ import { discoverAndFetchPages, DEFAULT_MAX_PAGES } from "../core/page-discovery
 import { extractPage } from "../core/extractor.js";
 import { buildEvidencePacket, type PageScanResult } from "../core/normalizer.js";
 import { EvidencePacketSchema } from "../core/evidence-packet.js";
+import { createAnthropicLlmClient, LlmCallError } from "../core/llm-client.js";
+import { generateOpportunityReport, ScientistError } from "../core/scientist.js";
+import { reviewOpportunityReport, ReviewerError, type ReviewRecord } from "../core/reviewer.js";
+import type { OpportunityCard, OpportunityReport } from "../core/opportunity-card.js";
 import { openStore } from "../store/sqlite.js";
+
+// Node 20.6+ built-in .env loader. Optional -- ANTHROPIC_API_KEY may also
+// already be set in the shell. Never throws if the file is absent; a
+// missing key is instead reported clearly by createAnthropicLlmClient when
+// `analyze` actually needs it.
+try {
+  if (typeof process.loadEnvFile === "function") {
+    process.loadEnvFile();
+  }
+} catch {
+  // no .env file present at cwd -- fall through silently and rely on
+  // whatever ANTHROPIC_API_KEY is already set in the shell environment.
+}
 
 const program = new Command();
 
 program
   .name("gauntlet")
-  .description("Gauntlet - Product Scientist & Fast-Value Loop (Build Order #1: Ingestion Engine)");
+  .description("Gauntlet - Product Scientist & Fast-Value Loop (Build Order #1: Ingestion Engine, #2: Scientist + Reviewer)");
 
 program
   .command("scan")
@@ -121,6 +138,112 @@ function printSummary(
   console.log(`  Missing evidence: ${packet.confidenceMetadata.missingEvidenceSummary}`);
   if (outPath) {
     console.log(`  Full packet written to ${outPath}`);
+  }
+}
+
+program
+  .command("analyze")
+  .description("Run the Product Scientist + Reviewer/Critic on a previously scanned Evidence Packet")
+  .argument("<packetId>", "Evidence Packet id, as printed by `gauntlet scan`")
+  .option("--db <path>", "SQLite database path", "./gauntlet.db")
+  .option("--out <path>", "Also write the Opportunity Report as JSON to this path")
+  .action(async (packetIdArg: string, opts: { db: string; out?: string }) => {
+    const packetId = Number.parseInt(packetIdArg, 10);
+    if (!Number.isFinite(packetId) || packetId < 1) {
+      console.error("Error: <packetId> must be a positive integer.");
+      process.exitCode = 1;
+      return;
+    }
+
+    const store = openStore(opts.db);
+    const packet = store.getEvidencePacketById(packetId);
+    if (!packet) {
+      console.error(`Error: no Evidence Packet with id ${packetId} in ${opts.db}. Run \`gauntlet scan\` first.`);
+      store.close();
+      process.exitCode = 1;
+      return;
+    }
+
+    let llmClient;
+    try {
+      llmClient = createAnthropicLlmClient();
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      store.close();
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`Running Product Scientist on Evidence Packet #${packetId} (${packet.productIdentity.productName})...`);
+    let scientistReport;
+    try {
+      scientistReport = await generateOpportunityReport(packet, llmClient);
+    } catch (err) {
+      console.error(describeAnalysisError("Scientist", err));
+      store.close();
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`  Generated ${scientistReport.cards.length} candidate Opportunity Card(s).`);
+
+    console.log("Running Reviewer/Critic on the generated cards...");
+    let reviewed;
+    try {
+      reviewed = await reviewOpportunityReport(scientistReport, packet, llmClient);
+    } catch (err) {
+      console.error(describeAnalysisError("Reviewer", err));
+      store.close();
+      process.exitCode = 1;
+      return;
+    }
+
+    const reportId = store.saveOpportunityReport(packetId, reviewed.report, reviewed.reviewRecords);
+    store.close();
+
+    if (opts.out) {
+      writeFileSync(opts.out, JSON.stringify(reviewed, null, 2), "utf-8");
+    }
+
+    printAnalysisSummary(reviewed.report, reviewed.reviewRecords, reportId, opts.out);
+  });
+
+function describeAnalysisError(component: "Scientist" | "Reviewer", err: unknown): string {
+  if (err instanceof ScientistError || err instanceof ReviewerError) {
+    return `${component} error: ${err.message}`;
+  }
+  if (err instanceof LlmCallError) {
+    return `${component} error: ${err.message}`;
+  }
+  return `${component} error (unexpected): ${err instanceof Error ? err.message : String(err)}`;
+}
+
+function printAnalysisSummary(
+  report: OpportunityReport,
+  reviewRecords: ReviewRecord[],
+  reportId: number,
+  outPath: string | undefined,
+): void {
+  console.log("");
+  console.log(`Opportunity Report #${reportId} saved (${report.cards.length} card(s) survived review).`);
+  const dropped = reviewRecords.filter((r) => r.verdict === "drop");
+  const downgraded = reviewRecords.filter((r) => r.verdict === "downgrade_confidence");
+  if (dropped.length > 0) {
+    console.log(`  Dropped by Reviewer: ${dropped.length} card(s) -- ${dropped.map((r) => r.cardTitle).join(", ")}`);
+  }
+  if (downgraded.length > 0) {
+    console.log(`  Confidence downgraded: ${downgraded.length} card(s) -- ${downgraded.map((r) => r.cardTitle).join(", ")}`);
+  }
+  console.log("");
+  report.cards.forEach((card: OpportunityCard, i: number) => {
+    const marker = card.nextAction === "build_this" ? " <-- Best next experiment" : "";
+    console.log(`${i + 1}. [${card.nextAction}]${marker} ${card.title}`);
+    console.log(`   Impact: ${card.expectedImpact.level} | Effort: ${card.effort.level} | Confidence: ${card.confidence.level} | rank_score: ${card.rankScore?.toFixed(2)}`);
+    console.log(`   Hypothesis: ${card.hypothesis}`);
+    console.log(`   Missing evidence: ${card.missingEvidence}`);
+    console.log("");
+  });
+  if (outPath) {
+    console.log(`Full report + review records written to ${outPath}`);
   }
 }
 
