@@ -12,10 +12,13 @@ Build Order #2 (Product Scientist v0 + Reviewer/Critic) done and validated
 against a real Claude API call against the real otter.ai Evidence Packet
 -- 5 Opportunity Cards generated, 2 downgraded by the Reviewer, exactly
 one `build_this`, every card traceable to real evidence. **Build Order #3
-(Pre-auth Report UI, `apps/web`) is built -- typecheck/lint/tests all
-pass -- but not yet validated against a real Supabase database and a real
-end-to-end scan.** That's the next concrete step, not a formality; see
-"What's next".
+(Pre-auth Report UI, `apps/web`) is built and validated end-to-end**: a
+real Supabase project, a real async scan job through the running Next.js
+app, a real Claude API call, polled to completion and rendered as a
+ranked report -- confirmed against a second real run on `https://otter.ai/`
+(4 Opportunity Cards, ranked by impact/effort/confidence, each with its
+supporting evidence and a proposed experiment). See "What's next" for
+what's still open.
 
 The Evidence Packet & Scientist Output Contract itself lives in the
 shared project doc `claude/gauntlet-evidence-contract-v0.md`, not in this
@@ -202,20 +205,70 @@ npm rebuild
 during Build Order #2's real smoke test, behind CrowdStrike Falcon --
 the same fix applies to Cisco Umbrella/Zscaler/Netskope-style inspection),
 any Claude API call will fail with `unable to verify the first
-certificate` unless Node is told to trust the local interception root CA:
+certificate` (and, per Build Order #3, any Postgres/Supabase connection
+will fail with `self-signed certificate in certificate chain`) unless
+Node is told to trust the local interception root CA:
 
-1. Find the exact certificate your network presents for the API host --
-   don't guess which root in your certificate store it is:
+1. Figure out what you actually need, per host -- these are two
+   different situations that happen to produce a similar-looking error,
+   confirmed by testing both on a real corporate machine:
+
+   - **A host that's genuinely MITM-intercepted** (Falcon reissuing its
+     own certificate for the destination -- this is what happens for
+     `api.anthropic.com`): don't capture the certificate off the wire.
+     An intercepting proxy mints a fresh leaf certificate per
+     connection/session, so a leaf you captured now can (and, per Build
+     Order #3's real test, did) stop validating the very next
+     connection. What you need is the proxy's own trust anchor -- the
+     self-signed root it uses to sign every leaf it mints, already
+     installed in Windows' own trust store for the interception to work
+     at all:
+     ```
+     certmgr.msc  ->  Trusted Root Certification Authorities  ->  Certificates
+     ```
+     Find it by publisher (`CrowdStrike` / `Falcon ROOT CA Proxy`, or
+     your vendor's equivalent for Umbrella/Zscaler/Netskope), right-click
+     -> All Tasks -> Export -> **Base-64 encoded X.509 (.CER)** (not the
+     binary DER option). That file's contents are plain PEM and can be
+     concatenated straight into your combined CA file. Once this exact
+     root is in the file, it validates *any* leaf Falcon mints for *any*
+     intercepted host, not just the one you happened to capture.
+
+   - **A host with its own private root that's simply not in the public
+     CA bundle, not intercepted at all** (this is what Supabase's pooler
+     turned out to be: its chain terminates in a self-signed
+     `CN=Supabase Root 2021 CA`, and the *issuer* on the leaf was
+     Supabase's own intermediate, not CrowdStrike -- no interception in
+     play). Here the real chain genuinely is sent over the wire, so
+     capturing it is correct and sufficient. Postgres negotiates TLS
+     differently than HTTPS (a startup `SSLRequest` packet, then an
+     upgrade), so pass `--pg`:
+     ```
+     node scripts/get-chain.mjs aws-0-<region>.pooler.supabase.com 6543 supabase-chain.pem --pg
+     ```
+     (Use the exact pooler host from your Supabase project's Connection
+     Info -- Transaction pooler tab.)
+
+   Either way, check what actually came back (`Subject` vs `Issuer` in
+   the script's own printed output, or the exported cert) before
+   trusting it -- don't assume every corporate-network TLS error is the
+   same root, or that it's an interception at all. Concatenate whatever
+   real/exported certs you end up with into one file (order doesn't
+   matter; Node's `ca` list tolerates unrelated extra certs fine, each
+   connection only needs *its own* matching entry present anywhere in
+   the list):
    ```
-   node scripts/get-chain.mjs
+   copy /b falcon-ca-root-real.cer+supabase-chain.pem falcon-root.pem
    ```
-   This prints the Subject/Issuer actually returned for
-   `api.anthropic.com` and saves it to `corp-ca-chain.pem`. If it's a
-   self-signed root (Issuer == Subject), it won't be sent over the wire --
-   export that exact certificate by name from Windows' Trusted Root store
-   (`certmgr.msc` -> Trusted Root Certification Authorities -> find it by
-   the CN the script printed -> Export -> Base-64 encoded X.509 (.CER)) and
-   use that file instead.
+
+   **This file does not survive a machine/profile reset or a moved
+   folder** -- if `NODE_EXTRA_CA_CERTS` is set but the file it points to
+   is missing, Node prints `Warning: Ignoring extra certs from ...,
+   load failed: ... No such file or directory` and silently falls back
+   to the public CA list only, so every intercepted connection (API
+   *and* DB) starts failing again with no obvious link back to this
+   step. That warning line in your terminal output is the tell -- if you
+   see it, regenerate the file with the steps above.
 2. Point Node at it -- **must be set before Node starts**, so it can't
    live in `.env` (that's loaded by our own code, after Node's TLS module
    already initialized):
@@ -229,7 +282,8 @@ certificate` unless Node is told to trust the local interception root CA:
 
 ### Web app (`apps/web`, Build Order #3)
 
-Not yet validated end-to-end -- these are the steps to do that:
+**Validated end-to-end** against a real Supabase project and a real scan.
+Setup steps, for a fresh environment:
 
 1. Create a Supabase project (supabase.com -> New project). Note the DB
    password you set.
@@ -245,6 +299,13 @@ Not yet validated end-to-end -- these are the steps to do that:
 5. `cd apps/web && npm run dev`, open `http://localhost:3000`, paste a
    real public URL.
 
+**On a corporate machine with TLS-inspecting endpoint security**, both
+the Supabase connection (step 4/5) and the Claude API call can fail with
+a certificate error the first time -- that's the section right above
+this one ("On a corporate machine..."), not a bug in this setup. It's a
+real, previously-hit-and-fixed case, not a hypothetical: see that
+section before assuming a fresh Supabase/API key setup is wrong.
+
 Deploying to Vercel: import the repo, set the **Root Directory** to
 `apps/web`, add the same two env vars in Vercel's project settings.
 Currently sized for the **Hobby** plan (`maxDuration = 300` in
@@ -256,13 +317,13 @@ something to pre-optimize for without a real run proving it's needed.
 
 ## What's next
 
-1. **Validate Build Order #3 end-to-end** -- a real Supabase project, a
-   real scan through the running app, start to finish. Everything above
-   is written and typechecks, but "typechecks" and "actually works
-   against a real Postgres and a real Claude API call" are different
-   claims, per this project's own testing discipline.
-2. The Concierge Validation Plan (§4) is still open -- no real design
+1. The Concierge Validation Plan (§4) is still open -- no real design
    partner has seen a report yet. That recruitment stays a product
    decision for Andres, not something to keep deferring indefinitely now
-   that there's a working, publicly-hostable report to actually show
-   someone.
+   that there's a working, publicly-hostable, end-to-end-validated report
+   to actually show someone.
+2. `apps/web` has not yet been deployed to Vercel itself (see the
+   "Deploying to Vercel" note above) -- local end-to-end works; a real
+   deployed instance, with its own env vars set in Vercel and a real
+   `maxDuration` under real network latency (not local), is a separate
+   claim from "works on localhost" and hasn't been tested yet.
