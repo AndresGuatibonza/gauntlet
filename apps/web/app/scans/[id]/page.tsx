@@ -15,7 +15,10 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
 import type { OpportunityCard, ReviewRecord } from "@gauntlet/core";
+import { FadeUp, StaggerItem, StaggerList } from "@/components/motion";
+import { StatusTracker, useSteppedStage } from "@/components/status-tracker";
 
 type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -29,10 +32,10 @@ interface ScanJobResponse {
 }
 
 const STATUS_LABEL: Record<ScanJobStatus, string> = {
-  queued: "Queued...",
-  scanning: "Scanning the site...",
-  analyzing: "Product Scientist is generating opportunities...",
-  reviewing: "Reviewer/Critic is checking each one...",
+  queued: "Queued…",
+  scanning: "Scanning the site…",
+  analyzing: "Product Scientist is generating opportunities…",
+  reviewing: "Reviewer/Critic is checking each one…",
   done: "Done",
   failed: "Failed",
 };
@@ -41,6 +44,11 @@ export default function ScanReportPage(): React.JSX.Element {
   const params = useParams<{ id: string }>();
   const [job, setJob] = useState<ScanJobResponse | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
+  // Paced display stage (see status-tracker.tsx). Called unconditionally,
+  // before any early return, per the Rules of Hooks; "failed"/"done" never
+  // reach the tracker, so they map to the last in-flight stage here.
+  const liveStage = !job || job.status === "done" || job.status === "failed" ? "reviewing" : job.status;
+  const shownStage = useSteppedStage(job ? liveStage : "queued");
 
   useEffect(() => {
     let cancelled = false;
@@ -77,27 +85,29 @@ export default function ScanReportPage(): React.JSX.Element {
   }, [params.id]);
 
   if (!job) {
-    return <p className="muted">{pollError ?? "Loading..."}</p>;
+    return <p className="muted">{pollError ?? "Loading…"}</p>;
   }
 
   if (job.status === "failed") {
     return (
-      <div className="card">
+      <FadeUp>
         <p className="error">Scan failed: {job.errorMessage}</p>
         <Link href="/">
           <button className="secondary">Try another URL</button>
         </Link>
-      </div>
+      </FadeUp>
     );
   }
 
   if (job.status !== "done" || !job.opportunityReport) {
     return (
-      <div className="card">
-        <p>{STATUS_LABEL[job.status]}</p>
-        <p className="muted">Scanning {job.url} -- this page updates on its own, no need to refresh.</p>
-        {pollError && <p className="muted">(one poll attempt failed, retrying: {pollError})</p>}
-      </div>
+      <FadeUp>
+        <p className="eyebrow">Report for {job.url}</p>
+        <p style={{ fontFamily: "var(--serif)", fontSize: 22, marginTop: 10 }}>{STATUS_LABEL[shownStage]}</p>
+        <StatusTracker current={shownStage} />
+        <p className="muted" style={{ fontSize: 14 }}>This page updates on its own &mdash; no need to refresh.</p>
+        {pollError && <p className="muted" style={{ fontSize: 13 }}>(one poll attempt failed, retrying: {pollError})</p>}
+      </FadeUp>
     );
   }
 
@@ -108,20 +118,40 @@ export default function ScanReportPage(): React.JSX.Element {
 
   return (
     <>
-      <p className="muted">Report for {job.url}</p>
-      {hero && <OpportunityCardView card={hero} isHero />}
-      {rest.map((card, i) => (
-        <OpportunityCardView key={i} card={card} />
-      ))}
+      <FadeUp>
+        <p className="eyebrow">Report</p>
+        <p className="lede" style={{ marginTop: 6 }}>{job.url}</p>
+      </FadeUp>
+
+      <StaggerList>
+        {hero && (
+          <StaggerItem>
+            <OpportunityCardView card={hero} isHero />
+          </StaggerItem>
+        )}
+        {rest.map((card, i) => (
+          <StaggerItem key={i}>
+            <OpportunityCardView card={card} />
+          </StaggerItem>
+        ))}
+      </StaggerList>
+
       {dropped.length > 0 && (
-        <p className="muted" style={{ fontSize: 13 }}>
-          The Reviewer/Critic dropped {dropped.length} additional candidate{dropped.length > 1 ? "s" : ""} that
-          didn&apos;t hold up to evidence review.
-        </p>
+        <FadeUp delay={0.2}>
+          <p className="muted" style={{ fontSize: 13 }}>
+            The Reviewer/Critic dropped {dropped.length} additional candidate{dropped.length > 1 ? "s" : ""} that
+            didn&apos;t hold up to evidence review.
+          </p>
+        </FadeUp>
       )}
-      <Link href={`/signup?from=${job.id}`}>
-        <button style={{ marginTop: 12 }}>Make this recommendation smarter -&gt;</button>
-      </Link>
+
+      <FadeUp delay={0.25}>
+        <Link href={`/signup?from=${job.id}`}>
+          <motion.button style={{ marginTop: 20 }} whileTap={{ scale: 0.97 }}>
+            Make this recommendation smarter &#8594;
+          </motion.button>
+        </Link>
+      </FadeUp>
     </>
   );
 }
@@ -130,8 +160,8 @@ function OpportunityCardView({ card, isHero }: { card: OpportunityCard; isHero?:
   return (
     <div className={isHero ? "card hero" : "card"}>
       {isHero && <span className="badge">Best next experiment</span>}
-      <h2 style={{ marginTop: isHero ? 8 : 0 }}>{card.title}</h2>
-      <p>{card.hypothesis}</p>
+      <h2 style={{ fontSize: isHero ? 28 : 22, marginTop: isHero ? 14 : 0 }}>{card.title}</h2>
+      <p className="muted" style={{ marginTop: 10 }}>{card.hypothesis}</p>
       <div className="metrics">
         <div className="metric">
           <strong>Impact</strong>
@@ -153,25 +183,23 @@ function OpportunityCardView({ card, isHero }: { card: OpportunityCard; isHero?:
       <div className="evidence-split">
         <div>
           <strong>What Gauntlet can see from the public surface</strong>
-          <p style={{ margin: "6px 0 0" }}>{card.observation}</p>
+          {card.observation}
         </div>
         <div>
           <strong>What connecting repo/analytics data would confirm</strong>
-          <p style={{ margin: "6px 0 0" }}>{card.missingEvidence}</p>
+          {card.missingEvidence}
         </div>
       </div>
-      <details style={{ marginTop: 12 }}>
-        <summary className="muted" style={{ cursor: "pointer" }}>
-          Proposed experiment
-        </summary>
-        <p style={{ fontSize: 14 }}>
-          <strong>Control:</strong> {card.experiment.control}
+      <details style={{ marginTop: 16 }}>
+        <summary style={{ cursor: "pointer" }}>Proposed experiment</summary>
+        <p style={{ fontSize: 14 }} className="muted">
+          <strong style={{ color: "var(--ink)" }}>Control:</strong> {card.experiment.control}
           <br />
-          <strong>Variant:</strong> {card.experiment.variant}
+          <strong style={{ color: "var(--ink)" }}>Variant:</strong> {card.experiment.variant}
           <br />
-          <strong>Primary metric:</strong> {card.experiment.primaryMetric}
+          <strong style={{ color: "var(--ink)" }}>Primary metric:</strong> {card.experiment.primaryMetric}
           <br />
-          <strong>Stopping rule:</strong> {card.experiment.stoppingRule}
+          <strong style={{ color: "var(--ink)" }}>Stopping rule:</strong> {card.experiment.stoppingRule}
         </p>
       </details>
     </div>

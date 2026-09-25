@@ -6,6 +6,7 @@
  * to attach, instead of that state having been silently dropped here.
  */
 import Link from "next/link";
+import { FadeUp } from "@/components/motion";
 
 export default async function SignupPlaceholderPage({
   searchParams,
@@ -14,17 +15,20 @@ export default async function SignupPlaceholderPage({
 }): Promise<React.JSX.Element> {
   const { from } = await searchParams;
   return (
-    <div className="card">
-      <h2>Coming soon</h2>
-      <p className="muted">
-        Account creation isn&apos;t built yet -- this is a placeholder. When it lands, it will pick up right
-        where you left off{from ? ` (report ${from})` : ""} instead of starting over.
+    <FadeUp>
+      <p className="eyebrow">Coming soon</p>
+      <h2 style={{ fontSize: 30, marginTop: 10 }}>Accounts aren&apos;t built yet</h2>
+      <p className="lede">
+        This is a placeholder. When account creation lands, it will pick up right where you left off
+        {from ? ` (report ${from})` : ""} instead of starting over.
       </p>
       {from && (
         <Link href={`/scans/${from}`}>
-          <button className="secondary">Back to report</button>
+          <button className="secondary" style={{ marginTop: 24 }}>
+            Back to report
+          </button>
         </Link>
       )}
-    </div>
+    </FadeUp>
   );
 }
