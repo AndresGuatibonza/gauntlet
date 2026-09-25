@@ -114,3 +114,66 @@ export const EvidencePacketSchema = z.object({
   confidenceMetadata: ConfidenceMetadataSchema,
 });
 export type EvidencePacket = z.infer<typeof EvidencePacketSchema>;
+
+// ---------------------------------------------------------------------------
+// Pre-Scientist guard: is there anything to analyze at all?
+// ---------------------------------------------------------------------------
+// The Opportunity Card contract (§2) requires every card to cite at least one
+// real `observedEvidence` id. A packet with zero evidence items therefore
+// makes the Scientist's task impossible by construction -- it cannot satisfy
+// "3-5 cards" and "cite real ids" at the same time. Its corrective retry
+// cannot fix that either, because the problem is not formatting, it is that
+// there is nothing to cite. Callers must check this BEFORE spending a Claude
+// API call, and fail with the real upstream reason instead of a misleading
+// Zod "evidenceRefs must contain at least 1 element" error.
+//
+// This is a strict emptiness check on purpose. "Too little evidence to be
+// useful" is a judgment call the contract does not define yet; inventing a
+// numeric threshold here would be undocumented architecture.
+
+/** Max unreachable pages listed individually in the explanation. */
+const MAX_UNREACHABLE_LISTED = 3;
+
+export function hasInsufficientEvidence(packet: EvidencePacket): boolean {
+  return packet.observedEvidence.length === 0;
+}
+
+/**
+ * Human-readable explanation of WHY a packet has no evidence, built only from
+ * what the packet itself recorded (fetch failure reasons, pages inspected) --
+ * no guessing beyond the one documented v0 limitation (no JS execution).
+ */
+export function describeInsufficientEvidence(packet: EvidencePacket): string {
+  const url = packet.productIdentity.url;
+  const { pagesInspected, pagesNotReachable } = packet.surfaceMap;
+  const causes: string[] = [];
+
+  if (pagesNotReachable.length > 0) {
+    const listed = pagesNotReachable
+      .slice(0, MAX_UNREACHABLE_LISTED)
+      .map((p) => `${p.url} (${p.reason})`)
+      .join("; ");
+    const extra = pagesNotReachable.length - MAX_UNREACHABLE_LISTED;
+    causes.push(
+      `${pagesNotReachable.length} page(s) could not be fetched: ${listed}` +
+        (extra > 0 ? `; and ${extra} more` : "") +
+        ". The site may be blocking automated requests.",
+    );
+  }
+
+  if (pagesInspected.length > 0) {
+    causes.push(
+      `${pagesInspected.length} page(s) were fetched but yielded no extractable evidence from their static HTML. ` +
+        "The site likely renders its content with JavaScript, which this v0 scanner does not execute.",
+    );
+  }
+
+  if (causes.length === 0) {
+    causes.push("No pages were fetched or reported as unreachable.");
+  }
+
+  return (
+    `No observable evidence could be collected from ${url}, so there is nothing for the Product Scientist to cite. ` +
+    `${causes.join(" ")} No analysis was run (no Claude API call was made).`
+  );
+}

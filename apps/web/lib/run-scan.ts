@@ -23,6 +23,8 @@ import {
   buildEvidencePacket,
   type PageScanResult,
   EvidencePacketSchema,
+  hasInsufficientEvidence,
+  describeInsufficientEvidence,
   createAnthropicLlmClient,
   LlmCallError,
   generateOpportunityReport,
@@ -61,6 +63,20 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
       await updateScanJob(jobId, {
         status: "failed",
         errorMessage: `Internal error: built Evidence Packet failed contract validation: ${parsedPacket.error.message}`,
+      });
+      return;
+    }
+
+    // Zero evidence makes the Scientist's contract unsatisfiable (every card
+    // must cite a real evidence id), so fail here with the real upstream
+    // reason (e.g. HTTP 403) instead of burning two Claude calls on a
+    // misleading "evidenceRefs must contain at least 1 element" error. The
+    // packet is still stored so the failure can be inspected afterwards.
+    if (hasInsufficientEvidence(parsedPacket.data)) {
+      await updateScanJob(jobId, {
+        status: "failed",
+        evidencePacket: parsedPacket.data,
+        errorMessage: describeInsufficientEvidence(parsedPacket.data),
       });
       return;
     }

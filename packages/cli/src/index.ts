@@ -12,6 +12,8 @@ import {
   buildEvidencePacket,
   type PageScanResult,
   EvidencePacketSchema,
+  hasInsufficientEvidence,
+  describeInsufficientEvidence,
   createAnthropicLlmClient,
   LlmCallError,
   generateOpportunityReport,
@@ -166,6 +168,16 @@ program
     const packet = store.getEvidencePacketById(packetId);
     if (!packet) {
       console.error(`Error: no Evidence Packet with id ${packetId} in ${opts.db}. Run \`gauntlet scan\` first.`);
+      store.close();
+      process.exitCode = 1;
+      return;
+    }
+
+    // Same guard as the web pipeline (apps/web/lib/run-scan.ts): with zero
+    // evidence the Scientist's contract cannot be satisfied, so stop before
+    // creating an LLM client or spending an API call.
+    if (hasInsufficientEvidence(packet)) {
+      console.error(`Error: ${describeInsufficientEvidence(packet)}`);
       store.close();
       process.exitCode = 1;
       return;
