@@ -23,36 +23,39 @@ import { readFileSync } from "node:fs";
 import { rootCertificates } from "node:tls";
 import { Pool } from "pg";
 import { attachDatabasePool } from "@vercel/functions";
+import { SUPABASE_CA_PEM } from "./supabase-ca.js";
 
 let pool: Pool | undefined;
 
 /**
- * Same rationale as llm-client.ts's buildHttpAgent(): NODE_EXTRA_CA_CERTS
- * is only reliably honored by Node's own core modules (https/tls), and
- * even then only if the file it points to actually exists and loads
- * cleanly -- if it fails, Node just prints a warning and silently falls
- * back to the public CA list, which is exactly what happened here (the
- * env var pointed at a since-deleted/missing file). Rather than trust
- * that silent fallback again, we read the file ourselves and fail loudly
- * and specifically if it's missing, instead of failing later with an
- * opaque "self-signed certificate in certificate chain" from deep inside
- * `pg`.
+ * The Supabase pooler's own root (SUPABASE_CA_PEM) is needed on every
+ * environment -- confirmed the hard way on a real Vercel deployment,
+ * which has no corporate proxy in the picture at all. NODE_EXTRA_CA_CERTS
+ * is a separate, machine-specific concern (corporate TLS-inspecting
+ * endpoint security -- see the README) layered on top of that, not a
+ * replacement for it: same rationale as llm-client.ts's buildHttpAgent(),
+ * the env var is only reliably honored by Node's own core https/tls
+ * modules, and only if the file it points to loads cleanly -- if it's
+ * set but unreadable, we fail loudly and specifically instead of letting
+ * it fail later with an opaque "self-signed certificate in certificate
+ * chain" from deep inside `pg`.
  */
-function buildSslConfig(): { rejectUnauthorized: boolean; ca?: (string | Buffer)[] } {
+function buildSslConfig(): { rejectUnauthorized: boolean; ca: (string | Buffer)[] } {
+  const ca: (string | Buffer)[] = [...rootCertificates, SUPABASE_CA_PEM];
+
   const extraCaCertsPath = process.env["NODE_EXTRA_CA_CERTS"];
-  if (!extraCaCertsPath) {
-    return { rejectUnauthorized: true };
+  if (extraCaCertsPath) {
+    try {
+      ca.push(readFileSync(extraCaCertsPath, "utf-8"));
+    } catch (err) {
+      throw new Error(
+        `NODE_EXTRA_CA_CERTS is set to "${extraCaCertsPath}" but that file could not be read: ${err instanceof Error ? err.message : String(err)}. ` +
+          `On a corporate machine with TLS-inspecting endpoint security, re-run scripts/get-chain.mjs against the Supabase pooler host to regenerate it (see README).`,
+      );
+    }
   }
-  let extraCaCerts: string;
-  try {
-    extraCaCerts = readFileSync(extraCaCertsPath, "utf-8");
-  } catch (err) {
-    throw new Error(
-      `NODE_EXTRA_CA_CERTS is set to "${extraCaCertsPath}" but that file could not be read: ${err instanceof Error ? err.message : String(err)}. ` +
-        `On a corporate machine with TLS-inspecting endpoint security, re-run scripts/get-chain.mjs against the Supabase pooler host to regenerate it (see README).`,
-    );
-  }
-  return { rejectUnauthorized: true, ca: [...rootCertificates, extraCaCerts] };
+
+  return { rejectUnauthorized: true, ca };
 }
 
 export function getPool(): Pool {
