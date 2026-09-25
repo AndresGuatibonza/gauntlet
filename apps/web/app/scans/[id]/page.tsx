@@ -15,7 +15,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import type { OpportunityCard, ReviewRecord } from "@gauntlet/core";
 import { FadeUp, StaggerItem, StaggerList } from "@/components/motion";
 import { StatusTracker, useSteppedStage } from "@/components/status-tracker";

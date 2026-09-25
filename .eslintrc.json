@@ -35,7 +35,7 @@
     "node_modules",
     ".next",
     "*.db",
-    "scans",
+    "/scans/",
     "**/next-env.d.ts"
   ]
 }
