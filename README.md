@@ -206,8 +206,17 @@ during Build Order #2's real smoke test, behind CrowdStrike Falcon --
 the same fix applies to Cisco Umbrella/Zscaler/Netskope-style inspection),
 any Claude API call will fail with `unable to verify the first
 certificate` (and, per Build Order #3, any Postgres/Supabase connection
-will fail with `self-signed certificate in certificate chain`) unless
-Node is told to trust the local interception root CA:
+will fail with `self-signed certificate in certificate chain`, or
+`UNABLE_TO_VERIFY_LEAF_SIGNATURE` if the interceptor rotated its root --
+see the note below) unless Node is told to trust the local interception
+root CA.
+
+**Before doing anything else, check whether this is actually the
+problem**: `npm run verify-tls` makes a real Postgres TLS handshake and a
+real Claude API call using the exact same CA setup the app uses, and
+prints OK/FAILED for each in one shot -- much faster than re-deriving the
+diagnosis from scratch every time this comes up (it has come up twice
+so far in Build Order #3, for two different underlying reasons).
 
 1. Figure out what you actually need, per host -- these are two
    different situations that happen to produce a similar-looking error,
@@ -269,6 +278,24 @@ Node is told to trust the local interception root CA:
    *and* DB) starts failing again with no obvious link back to this
    step. That warning line in your terminal output is the tell -- if you
    see it, regenerate the file with the steps above.
+
+   **Nor does it survive Falcon rotating its own interception root** --
+   confirmed the hard way (Build Order #3, one day apart): the exact same
+   setup that worked one day failed the next with `unable to verify the
+   first certificate` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, with no code
+   or file-missing warning involved -- the file was present and intact,
+   just signed by a root CrowdStrike had since replaced (confirmed via
+   the sha256 fingerprint of the exported cert differing between days,
+   same Subject/Issuer name both times). There's no warning for this one
+   -- the leaf's *signature* fails to verify, not "file missing". If a
+   previously-working corporate-intercepted connection starts failing
+   with a signature/verification error (not a missing-file warning) and
+   nothing in the repo changed, re-export the root from `certmgr.msc`
+   again before assuming it's a code regression -- `scripts/get-chain.mjs`
+   only re-confirms *whose* CA is signing today's leaf (still
+   `CN=Falcon ROOT CA Proxy` in both cases here), not whether that
+   specific key is the one your saved file has -- comparing the fingerprint
+   of your saved cert against a fresh export is what actually tells you.
 2. Point Node at it -- **must be set before Node starts**, so it can't
    live in `.env` (that's loaded by our own code, after Node's TLS module
    already initialized):

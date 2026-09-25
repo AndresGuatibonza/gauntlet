@@ -12,7 +12,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint . --ext .ts,.tsx,.mjs",
     "test": "npm run test --workspaces --if-present",
-    "build": "npm run build --workspace=@gauntlet/cli"
+    "build": "npm run build --workspace=@gauntlet/cli",
+    "verify-tls": "node scripts/verify-tls.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.5.0",
