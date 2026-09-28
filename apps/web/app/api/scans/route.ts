@@ -11,10 +11,18 @@
  * one automatic corrective retry in the same run), that's the concrete
  * signal to move to Pro and raise this to 800 -- not something to
  * pre-optimize for without a real run proving it's needed.
+ *
+ * Every scan is quota-checked before it's created (lib/rate-limit.ts):
+ * this endpoint is public and unauthenticated, and each scan crawls a
+ * third-party site and spends Claude API calls. Over quota -> 429 with a
+ * Retry-After header and a human-readable message the landing page shows
+ * as-is.
  */
 import { NextResponse, after } from "next/server";
+import { ipAddress } from "@vercel/functions";
 import { z } from "zod";
-import { createScanJob } from "@/lib/store";
+import { createScanJobWithinQuota } from "@/lib/store";
+import { hashClientIp, readIpHashSecret, readScanLimits, type ScanLimits } from "@/lib/rate-limit";
 import { runScanJob } from "@/lib/run-scan";
 
 export const maxDuration = 300;
@@ -39,15 +47,39 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request." }, { status: 400 });
   }
 
+  // Quota config errors are the server's fault, not the visitor's: fail
+  // closed with a 500 rather than running scans with no limit at all. The
+  // detail (which env var) goes to the server log only -- this endpoint is
+  // public, and env var names are not something to hand to any visitor.
+  let limits: ScanLimits;
+  let clientIpHash: string;
+  try {
+    limits = readScanLimits();
+    clientIpHash = hashClientIp(ipAddress(request), readIpHashSecret());
+  } catch (err) {
+    console.error("[POST /api/scans] scan quota misconfigured:", err instanceof Error ? err.message : err);
+    return NextResponse.json(
+      { error: "Scans are temporarily unavailable due to a server configuration problem." },
+      { status: 500 },
+    );
+  }
+
   let jobId: string;
   try {
-    jobId = await createScanJob(parsed.data.url, parsed.data.category);
+    const result = await createScanJobWithinQuota(parsed.data.url, parsed.data.category, clientIpHash, limits);
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: result.denial.message },
+        { status: 429, headers: { "Retry-After": String(result.denial.retryAfterSeconds) } },
+      );
+    }
+    jobId = result.id;
   } catch (err) {
-    // Most likely cause: DATABASE_URL misconfigured or the migration in
-    // lib/migrations/001_init.sql hasn't been applied yet -- surface the
-    // real message rather than letting this throw into Next's generic,
-    // unstructured 500 (which the frontend can still fall back to, but
-    // with no actionable detail).
+    // Most likely cause: DATABASE_URL misconfigured or a migration in
+    // lib/migrations/ (001_init.sql, 002_scan_rate_limit.sql) hasn't been
+    // applied yet -- surface the real message rather than letting this
+    // throw into Next's generic, unstructured 500 (which the frontend can
+    // still fall back to, but with no actionable detail).
     return NextResponse.json(
       { error: `Could not create scan job: ${err instanceof Error ? err.message : String(err)}` },
       { status: 500 },

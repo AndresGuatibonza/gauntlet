@@ -17,8 +17,10 @@ real Supabase project, a real async scan job through the running Next.js
 app, a real Claude API call, polled to completion and rendered as a
 ranked report -- confirmed against a second real run on `https://otter.ai/`
 (4 Opportunity Cards, ranked by impact/effort/confidence, each with its
-supporting evidence and a proposed experiment). See "What's next" for
-what's still open.
+supporting evidence and a proposed experiment) -- and **deployed on
+Vercel** (confirmed by Andres 2026-09-25), with a per-client and global
+scan quota on the public endpoint. See "What's next" for what's still
+open.
 
 The Evidence Packet & Scientist Output Contract itself lives in the
 shared project doc `claude/gauntlet-evidence-contract-v0.md`, not in this
@@ -120,6 +122,30 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
     dropped by the Reviewer, a DB error creating or reading the job)
     lands the job in `failed` with a real message -- never left stuck in
     an intermediate status with nothing for the report page to show.
+    That includes a scan that collected **zero evidence** (e.g. the site
+    answers the scanner with HTTP 403, as `www.perplexity.ai` does): it
+    fails fast with the real reason *before* any Claude call, instead of
+    asking the Scientist for cards it cannot cite. Sites that block
+    automated requests are an accepted v0 limitation (decided with
+    Andres 2026-09-25) -- no headless browser, no user-agent spoofing.
+  - **Scan quota on the public endpoint** (`lib/rate-limit.ts`,
+    migration `002_scan_rate_limit.sql`). `POST /api/scans` is
+    unauthenticated and every scan crawls a third-party site and spends
+    Claude calls, so it's limited to **3 scans per client per rolling
+    24h and 20 scans per 24h globally** (deliberately restrictive for the
+    10-20-design-partner concierge stage; overridable with
+    `SCAN_LIMIT_PER_CLIENT_PER_DAY` / `SCAN_LIMIT_GLOBAL_PER_DAY`). Over
+    quota -> `429` + `Retry-After` + a human-readable message. Every
+    attempt counts, including failed scans. Clients are identified by IP
+    (Vercel overwrites `x-real-ip`/`x-forwarded-for` to prevent
+    spoofing), stored only as an HMAC keyed with `SCAN_IP_HASH_SECRET`,
+    never raw. Check + insert happen in one transaction under a
+    Postgres advisory lock -- verified against a real Postgres 16 that
+    12 concurrent requests with a limit of 3 create exactly 3 jobs (and
+    5 without the lock). Missing/invalid quota config fails closed (500),
+    never "unlimited". Local `next dev` has no Vercel edge, so every
+    local request shares one "unknown client" bucket -- raise
+    `SCAN_LIMIT_PER_CLIENT_PER_DAY` in `.env.local` for local testing.
 
 ## Known limitations (v0, by design)
 
@@ -153,12 +179,12 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
   `unable to verify the first certificate` until Node is told to trust
   that interception CA -- see "Usage" below. This isn't a bug in
   Gauntlet; every Node process on that machine hits the same wall.
-- `apps/web`'s lint/test/typecheck are all clean, but there are no
-  automated tests for it yet -- its code is fundamentally "call a real
-  Postgres, call a real Claude API," which unit tests with fakes wouldn't
-  meaningfully cover. It's validated by a real end-to-end run instead
-  (Supabase project + a real scan through the running app), still
-  pending as of this writing.
+- `apps/web` has unit/component tests (vitest + jsdom + Testing Library:
+  the status tracker and the scan-quota logic), but its DB and Claude
+  paths are validated by real end-to-end runs rather than by tests with
+  fakes -- there's no Postgres in CI. The quota's SQL was verified
+  against a real local Postgres 16 during development, not by a
+  committed test.
 - `eslint`'s `no-undef` rule is turned off repo-wide (see
   `.eslintrc.json`). `@typescript-eslint/parser` without
   `eslint-plugin-react` wired in produces false positives against
@@ -319,10 +345,15 @@ Setup steps, for a fresh environment:
    see "Known limitations"/the code comments in `apps/web/lib/db.ts` for
    why that distinction matters for serverless.
 3. Copy `apps/web/.env.example` to `apps/web/.env.local`, fill in
-   `DATABASE_URL` (the pooler string above) and `ANTHROPIC_API_KEY`.
-4. Run `apps/web/lib/migrations/001_init.sql` once via Supabase's SQL
-   Editor (or `psql` against the direct connection). No automated
-   migration runner for the web app yet -- one migration doesn't earn one.
+   `DATABASE_URL` (the pooler string above), `ANTHROPIC_API_KEY`, and
+   `SCAN_IP_HASH_SECRET` (any long random string -- the file shows a
+   one-liner to generate one).
+4. Run the migrations in `apps/web/lib/migrations/` **in order**
+   (`001_init.sql`, then `002_scan_rate_limit.sql`) once each via
+   Supabase's SQL Editor (or `psql` against the direct connection). Both
+   are idempotent. There's no automated migration runner for the web app
+   yet -- two hand-applied migrations still don't earn one, but a third
+   probably would.
 5. `cd apps/web && npm run dev`, open `http://localhost:3000`, paste a
    real public URL.
 
@@ -334,7 +365,11 @@ real, previously-hit-and-fixed case, not a hypothetical: see that
 section before assuming a fresh Supabase/API key setup is wrong.
 
 Deploying to Vercel: import the repo, set the **Root Directory** to
-`apps/web`, add the same two env vars in Vercel's project settings.
+`apps/web`, add the same three env vars (`DATABASE_URL`,
+`ANTHROPIC_API_KEY`, `SCAN_IP_HASH_SECRET`) in Vercel's project
+settings. **Apply any new migration before deploying the code that
+needs it** -- e.g. the quota code inserts into
+`scan_jobs.client_ip_hash`, which only exists after `002`.
 Currently sized for the **Hobby** plan (`maxDuration = 300` in
 `apps/web/app/api/scans/route.ts`); if a real run shows the pipeline
 routinely needs more than 300s (most likely: both the Scientist and the
@@ -349,8 +384,15 @@ something to pre-optimize for without a real run proving it's needed.
    decision for Andres, not something to keep deferring indefinitely now
    that there's a working, publicly-hostable, end-to-end-validated report
    to actually show someone.
-2. `apps/web` has not yet been deployed to Vercel itself (see the
-   "Deploying to Vercel" note above) -- local end-to-end works; a real
-   deployed instance, with its own env vars set in Vercel and a real
-   `maxDuration` under real network latency (not local), is a separate
-   claim from "works on localhost" and hasn't been tested yet.
+2. Next PRD Build Order is #4 (GitHub deep-scan adapter), but per the
+   PRD's own sequencing rule it should follow real concierge validation
+   (item 1), not precede it.
+3. `npm audit` reports 7 advisories (as of 2026-09-28). Six are in
+   dev-only tooling (vitest/vite/esbuild -- affect local dev/test
+   servers, not the deployed app); one is Next via postcss (build-time
+   CSS processing of attacker-controlled CSS; our CSS is our own). All
+   fixes need major upgrades (Vitest 5, Next 16) -- do them as a
+   planned upgrade, never `npm audit fix --force`.
+4. Other PRD §18 open questions still unanswered, notably the
+   data-retention policy for anonymous scans (`scan_jobs` rows are
+   currently kept indefinitely).

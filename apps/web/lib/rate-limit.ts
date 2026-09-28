@@ -1,0 +1,173 @@
+/**
+ * Scan quota for the public, unauthenticated POST /api/scans endpoint.
+ *
+ * Why this exists: every scan crawls up to 8 pages of a third-party site
+ * and makes at least two Claude API calls billed to our key. Without a
+ * limit, anyone who finds the URL can run that in a loop. PRD v2 §18 lists
+ * this as an open question; this is the minimal, no-new-infrastructure
+ * answer (counts come straight from scan_jobs -- see
+ * migrations/002_scan_rate_limit.sql and store.ts).
+ *
+ * Default numbers (chosen deliberately restrictive, confirmed with Andres
+ * 2026-09-28): the current stage is the Concierge Validation Plan -- 10-20
+ * design partners in total (contract doc §4) -- so no legitimate visitor
+ * needs more than a handful of scans a day, and the whole product doesn't
+ * need more than ~20. Both are overridable per environment:
+ *   SCAN_LIMIT_PER_CLIENT_PER_DAY  (default 3)
+ *   SCAN_LIMIT_GLOBAL_PER_DAY      (default 20)
+ *
+ * Every scan attempt counts, including ones that later fail: a failed
+ * scan still crawled the target site, and some failures (Scientist
+ * errors) still spent Claude calls.
+ *
+ * The client is identified by IP. On Vercel, x-real-ip / x-forwarded-for
+ * are overwritten by Vercel's edge "to prevent IP spoofing" (Vercel docs,
+ * Request headers, checked 2026-09-28), so they can be trusted there. The
+ * IP is never stored raw -- only an HMAC-SHA256 keyed with
+ * SCAN_IP_HASH_SECRET (an unkeyed hash of an IPv4 address is trivially
+ * brute-forced).
+ */
+import { createHmac } from "node:crypto";
+
+/** Rolling quota window. */
+export const QUOTA_WINDOW_SECONDS = 24 * 60 * 60;
+
+export const DEFAULT_SCAN_LIMITS = { perClient: 3, global: 20 } as const;
+
+export interface ScanLimits {
+  perClient: number;
+  global: number;
+}
+
+/** Misconfiguration of the quota's own env vars -- a server problem, not the visitor's. */
+export class RateLimitConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RateLimitConfigError";
+  }
+}
+
+type Env = Record<string, string | undefined>;
+
+function parseLimit(env: Env, name: string, fallback: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw.trim());
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RateLimitConfigError(`${name} must be a positive integer, got "${raw}".`);
+  }
+  return value;
+}
+
+export function readScanLimits(env: Env = process.env): ScanLimits {
+  return {
+    perClient: parseLimit(env, "SCAN_LIMIT_PER_CLIENT_PER_DAY", DEFAULT_SCAN_LIMITS.perClient),
+    global: parseLimit(env, "SCAN_LIMIT_GLOBAL_PER_DAY", DEFAULT_SCAN_LIMITS.global),
+  };
+}
+
+/** Minimum secret length; anything shorter is almost certainly a placeholder. */
+const MIN_SECRET_LENGTH = 16;
+
+/**
+ * Fails closed: without the secret there is no safe way to identify
+ * clients, and silently skipping the quota would reopen exactly the hole
+ * this module closes.
+ */
+export function readIpHashSecret(env: Env = process.env): string {
+  const secret = env["SCAN_IP_HASH_SECRET"];
+  if (!secret || secret.length < MIN_SECRET_LENGTH) {
+    throw new RateLimitConfigError(
+      `SCAN_IP_HASH_SECRET is not set or shorter than ${MIN_SECRET_LENGTH} characters. ` +
+        "Set it to a long random string (see apps/web/.env.example).",
+    );
+  }
+  return secret;
+}
+
+/**
+ * Bucket used when no client IP is available (local `next dev`, which has
+ * no Vercel edge in front of it). All such requests share ONE quota --
+ * restrictive on purpose rather than unlimited.
+ */
+export const UNKNOWN_CLIENT = "unknown-client";
+
+export function hashClientIp(ip: string | undefined, secret: string): string {
+  const key = ip?.trim() || UNKNOWN_CLIENT;
+  return createHmac("sha256", secret).update(key).digest("hex");
+}
+
+/**
+ * Usage of one quota scope inside the current window, as read from the DB:
+ * how many scans it has, and the created_at of the scan whose expiry would
+ * free a slot (the `limit`-th most recent one) -- null if fewer than
+ * `limit` scans exist in the window.
+ */
+export interface QuotaUsage {
+  count: number;
+  slotFreesFromCreatedAt: Date | null;
+}
+
+export type QuotaDenial = {
+  allowed: false;
+  scope: "client" | "global";
+  retryAfterSeconds: number;
+  message: string;
+};
+
+export type QuotaDecision = { allowed: true } | QuotaDenial;
+
+function secondsUntilSlotFrees(usage: QuotaUsage, now: Date): number {
+  if (!usage.slotFreesFromCreatedAt) return QUOTA_WINDOW_SECONDS;
+  const freesAtMs = usage.slotFreesFromCreatedAt.getTime() + QUOTA_WINDOW_SECONDS * 1000;
+  return Math.max(1, Math.ceil((freesAtMs - now.getTime()) / 1000));
+}
+
+export function describeWait(seconds: number): string {
+  if (seconds < 60 * 60) {
+    const minutes = Math.max(1, Math.ceil(seconds / 60));
+    return `about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const hours = Math.ceil(seconds / 3600);
+  return `about ${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+/**
+ * Global capacity is checked first: if the whole product is at capacity,
+ * telling a visitor about their own per-client allowance would be
+ * misleading -- they couldn't scan even with allowance left.
+ */
+export function evaluateScanQuota(input: {
+  client: QuotaUsage;
+  global: QuotaUsage;
+  limits: ScanLimits;
+  now: Date;
+}): QuotaDecision {
+  const { client, global, limits, now } = input;
+
+  if (global.count >= limits.global) {
+    const retryAfterSeconds = secondsUntilSlotFrees(global, now);
+    return {
+      allowed: false,
+      scope: "global",
+      retryAfterSeconds,
+      message:
+        `Gauntlet has reached its daily scan capacity (${limits.global} scans per 24 hours) while in early access. ` +
+        `Please try again in ${describeWait(retryAfterSeconds)}.`,
+    };
+  }
+
+  if (client.count >= limits.perClient) {
+    const retryAfterSeconds = secondsUntilSlotFrees(client, now);
+    return {
+      allowed: false,
+      scope: "client",
+      retryAfterSeconds,
+      message:
+        `You've reached the scan limit for now (${limits.perClient} scans per 24 hours) while Gauntlet is in early access. ` +
+        `Please try again in ${describeWait(retryAfterSeconds)}.`,
+    };
+  }
+
+  return { allowed: true };
+}

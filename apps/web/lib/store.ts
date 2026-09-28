@@ -6,6 +6,7 @@
  */
 import type { EvidencePacket, OpportunityReport, ReviewRecord } from "@gauntlet/core";
 import { getPool } from "./db.js";
+import { evaluateScanQuota, QUOTA_WINDOW_SECONDS, type QuotaDenial, type ScanLimits } from "./rate-limit.js";
 
 export type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -50,21 +51,101 @@ function rowToJob(row: ScanJobRow): ScanJob {
   };
 }
 
-/** Creates a job in "queued" state and returns its id. */
-export async function createScanJob(url: string, category: "ai_tool" | "ai_saas"): Promise<string> {
-  const result = await getPool().query<{ id: string }>(
-    `insert into scan_jobs (url, category, status) values ($1, $2, 'queued') returning id`,
-    [url, category],
-  );
-  const id = result.rows[0]?.id;
-  if (!id) {
-    // Should be unreachable -- an insert...returning with no error always
-    // returns exactly one row. Guarded anyway per the "never assume, always
-    // check" rule: a silent undefined id here would surface much later as
-    // a confusing 404 on the job page instead of a clear failure now.
-    throw new Error("createScanJob: insert returned no id");
+/**
+ * Reads both quota scopes and, only if both allow it, inserts the job --
+ * all inside ONE transaction holding a transaction-scoped advisory lock,
+ * so two concurrent requests can't both read "2 of 3 used" and both
+ * insert. The lock serializes scan creation globally, which is fine at
+ * this volume (the global quota itself is ~20/day) and is released
+ * automatically at commit/rollback -- compatible with Supabase's
+ * transaction-mode pooler, which pins one server connection for the
+ * duration of a transaction.
+ *
+ * All time math uses the database's now(), not the function instance's
+ * clock, so the window can't drift between Vercel and Postgres.
+ */
+const SCAN_QUOTA_LOCK_KEY = 7254001; // arbitrary, only needs to be unique within this database
+
+const QUOTA_USAGE_SQL = `
+  with win as (select now() - make_interval(secs => $4) as since)
+  select
+    now() as now,
+    (select count(*)::int from scan_jobs, win
+      where client_ip_hash = $1 and created_at > win.since) as client_count,
+    (select created_at from scan_jobs, win
+      where client_ip_hash = $1 and created_at > win.since
+      order by created_at desc offset ($2::int - 1) limit 1) as client_slot_frees_from,
+    (select count(*)::int from scan_jobs, win
+      where created_at > win.since) as global_count,
+    (select created_at from scan_jobs, win
+      where created_at > win.since
+      order by created_at desc offset ($3::int - 1) limit 1) as global_slot_frees_from
+`;
+
+interface QuotaUsageRow {
+  now: Date;
+  client_count: number;
+  client_slot_frees_from: Date | null;
+  global_count: number;
+  global_slot_frees_from: Date | null;
+}
+
+export type CreateScanJobResult = { ok: true; id: string } | { ok: false; denial: QuotaDenial };
+
+/** Creates a job in "queued" state if the client and global quotas allow it. */
+export async function createScanJobWithinQuota(
+  url: string,
+  category: "ai_tool" | "ai_saas",
+  clientIpHash: string,
+  limits: ScanLimits,
+): Promise<CreateScanJobResult> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock($1)", [SCAN_QUOTA_LOCK_KEY]);
+
+    const usage = await client.query<QuotaUsageRow>(QUOTA_USAGE_SQL, [
+      clientIpHash,
+      limits.perClient,
+      limits.global,
+      QUOTA_WINDOW_SECONDS,
+    ]);
+    const row = usage.rows[0];
+    if (!row) {
+      // Unreachable: a SELECT with no FROM always returns exactly one row.
+      throw new Error("createScanJobWithinQuota: quota usage query returned no row");
+    }
+
+    const decision = evaluateScanQuota({
+      client: { count: row.client_count, slotFreesFromCreatedAt: row.client_slot_frees_from },
+      global: { count: row.global_count, slotFreesFromCreatedAt: row.global_slot_frees_from },
+      limits,
+      now: row.now,
+    });
+    if (!decision.allowed) {
+      await client.query("rollback");
+      return { ok: false, denial: decision };
+    }
+
+    const inserted = await client.query<{ id: string }>(
+      `insert into scan_jobs (url, category, status, client_ip_hash) values ($1, $2, 'queued', $3) returning id`,
+      [url, category, clientIpHash],
+    );
+    const id = inserted.rows[0]?.id;
+    if (!id) {
+      // Same "never assume" guard the previous createScanJob had.
+      throw new Error("createScanJobWithinQuota: insert returned no id");
+    }
+    await client.query("commit");
+    return { ok: true, id };
+  } catch (err) {
+    await client.query("rollback").catch(() => {
+      // The original error is the one worth surfacing.
+    });
+    throw err;
+  } finally {
+    client.release();
   }
-  return id;
 }
 
 export async function getScanJob(id: string): Promise<ScanJob | null> {
