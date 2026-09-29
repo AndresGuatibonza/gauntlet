@@ -29,7 +29,7 @@ the PRD puts real-partner validation first.
 | Web app: landing, async scan jobs, report page | `apps/web` (Next.js 15, Supabase Postgres, Vercel Hobby) | Deployed. |
 | Scan quota (3/client, 20 global per 24h) | `apps/web/lib/rate-limit.ts`, migration 002 | Deployed, verified in production. |
 | Evidence-rich cards, Build this CTA, ratings, funnel events | `components/opportunity-card.tsx`, `lib/events.ts`, migration 003 | Deployed, verified in production 2026-09-29. |
-| Light and dark themes with a header switch | `app/globals.css` (tokens), `components/theme-toggle.tsx` | Follows the OS until the visitor chooses; the choice is stored and applied before first paint. |
+| Light and dark themes with a header switch | `app/globals.css` (tokens), `components/theme-toggle.tsx` | Deployed 2026-09-29. Follows the OS until the visitor chooses; the choice is stored and applied before first paint. |
 
 Tests: `npm test` at the root runs all three workspaces (~115 tests:
 CLI 5, core 56, web 54). `npm run typecheck` and `npm run lint` must be
@@ -99,8 +99,8 @@ clean before any commit.
 
 ## 6. Open at hand-off time
 
-- The theme switch and the malformed-id 404 fix (2026-09-29) need a
-  plain push; no migration or env var.
+- Nothing pending in engineering: everything through the theme switch and
+  the malformed-id 404 fix is pushed and deployed (2026-09-29).
 - Nobody outside the team has seen a report yet.
 
 ## 7. What's next, in PRD order
