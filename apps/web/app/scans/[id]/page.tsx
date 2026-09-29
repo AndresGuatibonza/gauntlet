@@ -5,20 +5,18 @@
  * job is "done" or "failed" -- no websockets/SSE for v0, a plain poll is
  * simpler and the job usually finishes in well under a minute anyway.
  *
- * Renders, per card: the hero "Best next experiment" (nextAction ===
- * "build_this") first, then the rest; for each card, the
- * observation/evidenceRefs side ("what Gauntlet can see from public
- * surface") against missingEvidence ("what connecting repo/data would
- * confirm") -- straight from the existing Opportunity Card contract
- * fields, no new copy invented to fill that PRD requirement.
+ * Renders the hero "Best next experiment" (nextAction === "build_this")
+ * first, then the rest, each via components/opportunity-card.tsx, with
+ * cited evidence resolved against this job's own Evidence Packet.
  */
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import type { OpportunityCard, ReviewRecord } from "@gauntlet/core";
+import type { EvidenceItem, EvidencePacket, OpportunityCard, ReviewRecord } from "@gauntlet/core";
 import { FadeUp, StaggerItem, StaggerList } from "@/components/motion";
 import { StatusTracker, useSteppedStage } from "@/components/status-tracker";
+import { OpportunityCardView } from "@/components/opportunity-card";
 
 type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -26,6 +24,7 @@ interface ScanJobResponse {
   id: string;
   url: string;
   status: ScanJobStatus;
+  evidencePacket: EvidencePacket | null;
   opportunityReport: { cards: OpportunityCard[] } | null;
   reviewRecords: ReviewRecord[] | null;
   errorMessage: string | null;
@@ -115,6 +114,9 @@ export default function ScanReportPage(): React.JSX.Element {
   const hero = cards.find((c) => c.nextAction === "build_this");
   const rest = cards.filter((c) => c.nextAction !== "build_this");
   const dropped = (job.reviewRecords ?? []).filter((r) => r.verdict === "drop");
+  const evidenceById = new Map<string, EvidenceItem>(
+    (job.evidencePacket?.observedEvidence ?? []).map((item) => [item.id, item]),
+  );
 
   return (
     <>
@@ -126,12 +128,12 @@ export default function ScanReportPage(): React.JSX.Element {
       <StaggerList>
         {hero && (
           <StaggerItem>
-            <OpportunityCardView card={hero} isHero />
+            <OpportunityCardView card={hero} isHero evidenceById={evidenceById} />
           </StaggerItem>
         )}
         {rest.map((card, i) => (
           <StaggerItem key={i}>
-            <OpportunityCardView card={card} />
+            <OpportunityCardView card={card} evidenceById={evidenceById} />
           </StaggerItem>
         ))}
       </StaggerList>
@@ -153,55 +155,5 @@ export default function ScanReportPage(): React.JSX.Element {
         </Link>
       </FadeUp>
     </>
-  );
-}
-
-function OpportunityCardView({ card, isHero }: { card: OpportunityCard; isHero?: boolean }): React.JSX.Element {
-  return (
-    <div className={isHero ? "card hero" : "card"}>
-      {isHero && <span className="badge">Best next experiment</span>}
-      <h2 style={{ fontSize: isHero ? 28 : 22, marginTop: isHero ? 14 : 0 }}>{card.title}</h2>
-      <p className="muted" style={{ marginTop: 10 }}>{card.hypothesis}</p>
-      <div className="metrics">
-        <div className="metric">
-          <strong>Impact</strong>
-          {card.expectedImpact.level}
-        </div>
-        <div className="metric">
-          <strong>Effort</strong>
-          {card.effort.level}
-        </div>
-        <div className="metric">
-          <strong>Confidence</strong>
-          {card.confidence.level}
-        </div>
-        <div className="metric">
-          <strong>Evidence quality</strong>
-          {card.confidence.evidenceQualityScore}/3
-        </div>
-      </div>
-      <div className="evidence-split">
-        <div>
-          <strong>What Gauntlet can see from the public surface</strong>
-          {card.observation}
-        </div>
-        <div>
-          <strong>What connecting repo/analytics data would confirm</strong>
-          {card.missingEvidence}
-        </div>
-      </div>
-      <details style={{ marginTop: 16 }}>
-        <summary style={{ cursor: "pointer" }}>Proposed experiment</summary>
-        <p style={{ fontSize: 14 }} className="muted">
-          <strong style={{ color: "var(--ink)" }}>Control:</strong> {card.experiment.control}
-          <br />
-          <strong style={{ color: "var(--ink)" }}>Variant:</strong> {card.experiment.variant}
-          <br />
-          <strong style={{ color: "var(--ink)" }}>Primary metric:</strong> {card.experiment.primaryMetric}
-          <br />
-          <strong style={{ color: "var(--ink)" }}>Stopping rule:</strong> {card.experiment.stoppingRule}
-        </p>
-      </details>
-    </div>
   );
 }
