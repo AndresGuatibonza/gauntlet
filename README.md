@@ -6,6 +6,9 @@ improvement opportunities and proposes a defensible experiment for each.
 See the Gauntlet PRD v2 (Lean MVP) for the full product spec and Build
 Order sequence.
 
+> **Picking this up?** Start with [`HANDOFF.md`](HANDOFF.md) -- current
+> status, decisions and their reasons, known risks, and what's next.
+
 **Status:** Build Order #0 (evidence contract) done. Build Order #1
 (Public URL Ingestion Engine) done and validated against real internet.
 Build Order #2 (Product Scientist v0 + Reviewer/Critic) done and validated
