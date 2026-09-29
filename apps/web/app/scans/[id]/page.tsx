@@ -186,7 +186,7 @@ export default function ScanReportPage(): React.JSX.Element {
         <p className="lede" style={{ marginTop: 6 }}>{job.url}</p>
       </FadeUp>
 
-      <StaggerList>
+      <StaggerList className="card-stack">
         {hero && (
           <StaggerItem>
             <OpportunityCardView

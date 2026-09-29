@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { THEME_BOOT_SCRIPT, ThemeToggle } from "@/components/theme-toggle";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,10 +15,15 @@ export const metadata: Metadata = {
 // trust problem documented at length in the README, for a page font that
 // isn't worth that risk). Fraunces is the display serif for big editorial
 // headlines; Inter is the body/UI sans.
+//
+// THEME_BOOT_SCRIPT applies a stored light/dark choice before first paint
+// (see components/theme-toggle.tsx). It sets data-theme on <html> before
+// React hydrates, hence suppressHydrationWarning on that element only.
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
@@ -25,6 +32,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
+        <header className="site-header">
+          <Link href="/" className="wordmark">
+            Gauntlet
+          </Link>
+          <ThemeToggle />
+        </header>
         <main>{children}</main>
       </body>
     </html>

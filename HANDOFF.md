@@ -28,10 +28,11 @@ the PRD puts real-partner validation first.
 | CLI (`scan`, `analyze`, local SQLite) | `packages/cli` | Done. |
 | Web app: landing, async scan jobs, report page | `apps/web` (Next.js 15, Supabase Postgres, Vercel Hobby) | Deployed. |
 | Scan quota (3/client, 20 global per 24h) | `apps/web/lib/rate-limit.ts`, migration 002 | Deployed, verified in production. |
-| Evidence-rich cards, Build this CTA, ratings, funnel events | `components/opportunity-card.tsx`, `lib/events.ts`, migration 003 | Committed 2026-09-29 — see §6 for deploy status. |
+| Evidence-rich cards, Build this CTA, ratings, funnel events | `components/opportunity-card.tsx`, `lib/events.ts`, migration 003 | Deployed, verified in production 2026-09-29. |
+| Light and dark themes with a header switch | `app/globals.css` (tokens), `components/theme-toggle.tsx` | Follows the OS until the visitor chooses; the choice is stored and applied before first paint. |
 
-Tests: `npm test` at the root runs all three workspaces (~108 tests:
-CLI 5, core 56, web 47). `npm run typecheck` and `npm run lint` must be
+Tests: `npm test` at the root runs all three workspaces (~115 tests:
+CLI 5, core 56, web 54). `npm run typecheck` and `npm run lint` must be
 clean before any commit.
 
 ## 3. Running it
@@ -94,14 +95,12 @@ clean before any commit.
 7. **`maxDuration = 300`** (Vercel Hobby). If a run needs both corrective
    retries it may hit the ceiling; move to Pro (800s) only when a real run
    proves it.
-8. Minor: `GET /api/scans/<not-a-uuid>` returns 500 instead of 404 (from
-   code reading; the new events route validates the id). Signup is a
-   placeholder that only carries `?from=` and `?card=`.
+8. Minor: signup is a placeholder that only carries `?from=` and `?card=`.
 
 ## 6. Open at hand-off time
 
-- Deploy of `d94e429` + `915975f` (migration 003 first) — check with
-  `git log origin/main` whether it's live; if not, follow §3.
+- The theme switch and the malformed-id 404 fix (2026-09-29) need a
+  plain push; no migration or env var.
 - Nobody outside the team has seen a report yet.
 
 ## 7. What's next, in PRD order
