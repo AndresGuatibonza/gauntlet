@@ -9,14 +9,15 @@
  * first, then the rest, each via components/opportunity-card.tsx, with
  * cited evidence resolved against this job's own Evidence Packet.
  */
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import type { EvidenceItem, EvidencePacket, OpportunityCard, ReviewRecord } from "@gauntlet/core";
 import { FadeUp, StaggerItem, StaggerList } from "@/components/motion";
 import { StatusTracker, useSteppedStage } from "@/components/status-tracker";
-import { OpportunityCardView } from "@/components/opportunity-card";
+import { OpportunityCardView, type CardActions } from "@/components/opportunity-card";
+import type { CardRating, ClientEvent } from "@/lib/events";
 
 type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -39,6 +40,25 @@ const STATUS_LABEL: Record<ScanJobStatus, string> = {
   failed: "Failed",
 };
 
+/**
+ * Sends one funnel/feedback event (POST /api/scans/:id/events). Never
+ * throws: analytics must not break the report. `keepalive` lets an event
+ * sent right before navigating away (Build this) still reach the server.
+ */
+async function sendScanEvent(jobId: string, event: ClientEvent, keepalive = false): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/scans/${jobId}/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+      keepalive,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export default function ScanReportPage(): React.JSX.Element {
   const params = useParams<{ id: string }>();
   const [job, setJob] = useState<ScanJobResponse | null>(null);
@@ -48,6 +68,45 @@ export default function ScanReportPage(): React.JSX.Element {
   // reach the tracker, so they map to the last in-flight stage here.
   const liveStage = !job || job.status === "done" || job.status === "failed" ? "reviewing" : job.status;
   const shownStage = useSteppedStage(job ? liveStage : "queued");
+  const router = useRouter();
+  // Per-card rating/error, keyed by the card's index in the report.
+  const [ratings, setRatings] = useState<Record<number, CardRating>>({});
+  const [feedbackErrors, setFeedbackErrors] = useState<Record<number, string>>({});
+  const reportViewedSent = useRef(false);
+
+  const isDone = job?.status === "done" && job.opportunityReport !== null;
+  useEffect(() => {
+    // Once per page load; the server also dedupes per client.
+    if (!isDone || reportViewedSent.current) return;
+    reportViewedSent.current = true;
+    void sendScanEvent(params.id, { type: "report_viewed" });
+  }, [isDone, params.id]);
+
+  function rateCard(cardIndex: number, rating: CardRating): void {
+    const previous = ratings[cardIndex];
+    // Optimistic: show the choice immediately, roll back if it didn't save.
+    setRatings((r) => ({ ...r, [cardIndex]: rating }));
+    setFeedbackErrors(({ [cardIndex]: _cleared, ...rest }) => rest);
+    void sendScanEvent(params.id, { type: "opportunity_feedback_submitted", cardIndex, rating }).then((ok) => {
+      if (ok) return;
+      setRatings(({ [cardIndex]: _failed, ...rest }) => (previous ? { ...rest, [cardIndex]: previous } : rest));
+      setFeedbackErrors((e) => ({ ...e, [cardIndex]: "Couldn't save your rating. Please try again." }));
+    });
+  }
+
+  function buildThis(cardIndex: number): void {
+    void sendScanEvent(params.id, { type: "build_this_requested", cardIndex }, true);
+    router.push(`/signup?from=${params.id}&card=${cardIndex}`);
+  }
+
+  function actionsFor(cardIndex: number): CardActions {
+    return {
+      rating: ratings[cardIndex] ?? null,
+      feedbackError: feedbackErrors[cardIndex] ?? null,
+      onRate: (rating) => rateCard(cardIndex, rating),
+      onBuildThis: () => buildThis(cardIndex),
+    };
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -111,8 +170,10 @@ export default function ScanReportPage(): React.JSX.Element {
   }
 
   const cards = job.opportunityReport.cards;
-  const hero = cards.find((c) => c.nextAction === "build_this");
-  const rest = cards.filter((c) => c.nextAction !== "build_this");
+  // Keep each card's index in the report: events reference cards by it.
+  const indexed = cards.map((card, index) => ({ card, index }));
+  const hero = indexed.find(({ card }) => card.nextAction === "build_this");
+  const rest = indexed.filter(({ card }) => card.nextAction !== "build_this");
   const dropped = (job.reviewRecords ?? []).filter((r) => r.verdict === "drop");
   const evidenceById = new Map<string, EvidenceItem>(
     (job.evidencePacket?.observedEvidence ?? []).map((item) => [item.id, item]),
@@ -128,12 +189,17 @@ export default function ScanReportPage(): React.JSX.Element {
       <StaggerList>
         {hero && (
           <StaggerItem>
-            <OpportunityCardView card={hero} isHero evidenceById={evidenceById} />
+            <OpportunityCardView
+              card={hero.card}
+              isHero
+              evidenceById={evidenceById}
+              actions={actionsFor(hero.index)}
+            />
           </StaggerItem>
         )}
-        {rest.map((card, i) => (
-          <StaggerItem key={i}>
-            <OpportunityCardView card={card} evidenceById={evidenceById} />
+        {rest.map(({ card, index }) => (
+          <StaggerItem key={index}>
+            <OpportunityCardView card={card} evidenceById={evidenceById} actions={actionsFor(index)} />
           </StaggerItem>
         ))}
       </StaggerList>

@@ -7,6 +7,7 @@
 import type { EvidencePacket, OpportunityReport, ReviewRecord } from "@gauntlet/core";
 import { getPool } from "./db.js";
 import { evaluateScanQuota, QUOTA_WINDOW_SECONDS, type QuotaDenial, type ScanLimits } from "./rate-limit.js";
+import type { CardRating, ScanEventType } from "./events.js";
 
 export type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -136,6 +137,12 @@ export async function createScanJobWithinQuota(
       // Same "never assume" guard the previous createScanJob had.
       throw new Error("createScanJobWithinQuota: insert returned no id");
     }
+    // Funnel event, in the same transaction as the job: a scan can never
+    // exist without its scan_started row, or vice versa.
+    await client.query(
+      `insert into scan_events (scan_job_id, event_type, client_ip_hash) values ($1, 'scan_started', $2)`,
+      [id, clientIpHash],
+    );
     await client.query("commit");
     return { ok: true, id };
   } catch (err) {
@@ -198,4 +205,40 @@ export async function updateScanJob(
   setClauses.push(`updated_at = now()`);
   values.push(id);
   await getPool().query(`update scan_jobs set ${setClauses.join(", ")} where id = $${i}`, values);
+}
+
+export interface ScanEventInput {
+  scanJobId: string;
+  type: ScanEventType;
+  cardIndex?: number;
+  cardTitle?: string | null;
+  rating?: CardRating;
+  clientIpHash?: string | null;
+}
+
+/**
+ * Records one funnel event (migrations/003_scan_events.sql). Idempotent
+ * per (scan, type, card, client) via scan_events_dedupe_idx: a repeated
+ * event is a no-op, except feedback, where the latest rating replaces the
+ * earlier one -- a changed mind is one vote, not two.
+ */
+export async function recordScanEvent(event: ScanEventInput): Promise<void> {
+  const onConflict =
+    event.type === "opportunity_feedback_submitted"
+      ? "do update set rating = excluded.rating, card_title = excluded.card_title, updated_at = now()"
+      : "do nothing";
+  await getPool().query(
+    `insert into scan_events (scan_job_id, event_type, card_index, card_title, rating, client_ip_hash)
+     values ($1, $2, $3, $4, $5, $6)
+     on conflict (scan_job_id, event_type, (coalesce(card_index, -1)), (coalesce(client_ip_hash, '')))
+     ${onConflict}`,
+    [
+      event.scanJobId,
+      event.type,
+      event.cardIndex ?? null,
+      event.cardTitle ?? null,
+      event.rating ?? null,
+      event.clientIpHash ?? null,
+    ],
+  );
 }

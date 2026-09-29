@@ -316,3 +316,38 @@ details summary::marker {
 .evidence-meta a {
   color: var(--ink-dim);
 }
+
+/* Card actions: "Build this" + contract §4 rating chips */
+.card-actions {
+  margin-top: 24px;
+}
+
+.feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.feedback-prompt {
+  font-size: 13px;
+  color: var(--ink-faint);
+  margin-right: 4px;
+}
+
+button.chip {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+}
+
+button.chip[aria-pressed="true"] {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}

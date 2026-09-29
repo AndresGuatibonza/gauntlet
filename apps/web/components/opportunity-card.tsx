@@ -12,8 +12,13 @@
  * Cited evidence is resolved against the job's own Evidence Packet, so
  * the reader sees the actual excerpt and source page behind each claim --
  * the thing that makes a recommendation defensible rather than generic.
+ *
+ * Actions (optional, so the card stays a plain presentational component):
+ * the PRD's primary "Build this" CTA and the contract §4 five-point
+ * rating. The component only reports clicks; the page owns sending them.
  */
 import type { ChangeSurface, EvidenceItem, OpportunityCard } from "@gauntlet/core";
+import { CARD_RATINGS, CARD_RATING_LABEL, type CardRating } from "@/lib/events";
 
 const CHANGE_SURFACE_LABEL: Record<ChangeSurface, string> = {
   prompt: "Prompt",
@@ -50,14 +55,23 @@ export function safeSourceLink(url: string): { href: string; label: string } | n
   }
 }
 
+export interface CardActions {
+  rating: CardRating | null;
+  feedbackError: string | null;
+  onRate: (rating: CardRating) => void;
+  onBuildThis: () => void;
+}
+
 export function OpportunityCardView({
   card,
   isHero,
   evidenceById,
+  actions,
 }: {
   card: OpportunityCard;
   isHero?: boolean;
   evidenceById: ReadonlyMap<string, EvidenceItem>;
+  actions?: CardActions;
 }): React.JSX.Element {
   return (
     <div className={isHero ? "card hero" : "card"}>
@@ -137,6 +151,37 @@ export function OpportunityCardView({
           <dd>{card.experiment.stoppingRule}</dd>
         </dl>
       </details>
+
+      {actions && <CardActionsRow actions={actions} isHero={isHero} />}
+    </div>
+  );
+}
+
+function CardActionsRow({ actions, isHero }: { actions: CardActions; isHero?: boolean }): React.JSX.Element {
+  return (
+    <div className="card-actions">
+      <button type="button" className={isHero ? undefined : "secondary"} onClick={actions.onBuildThis}>
+        Build this &#8594;
+      </button>
+      <div className="feedback" role="group" aria-label="Rate this opportunity">
+        <span className="feedback-prompt">How does this land?</span>
+        {CARD_RATINGS.map((rating) => (
+          <button
+            key={rating}
+            type="button"
+            className="chip"
+            aria-pressed={actions.rating === rating}
+            onClick={() => actions.onRate(rating)}
+          >
+            {CARD_RATING_LABEL[rating]}
+          </button>
+        ))}
+      </div>
+      {actions.feedbackError && (
+        <p className="error" role="alert" style={{ fontSize: 13, margin: "8px 0 0" }}>
+          {actions.feedbackError}
+        </p>
+      )}
     </div>
   );
 }

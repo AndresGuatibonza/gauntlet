@@ -32,7 +32,7 @@ import {
   reviewOpportunityReport,
   ReviewerError,
 } from "@gauntlet/core";
-import { updateScanJob } from "./store.js";
+import { recordScanEvent, updateScanJob } from "./store.js";
 
 export async function runScanJob(jobId: string, url: string, category: "ai_tool" | "ai_saas"): Promise<void> {
   try {
@@ -110,6 +110,11 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
         status: "done",
         opportunityReport: reviewed.report,
         reviewRecords: reviewed.reviewRecords,
+      });
+      // Best-effort: a failed analytics write must never turn a finished,
+      // stored report into a "failed" scan the visitor can't see.
+      await recordScanEvent({ scanJobId: jobId, type: "scan_completed" }).catch((eventErr) => {
+        console.error("[run-scan] could not record scan_completed:", eventErr);
       });
     } catch (err) {
       await updateScanJob(jobId, { status: "failed", errorMessage: describeStageError("Reviewer", err) });

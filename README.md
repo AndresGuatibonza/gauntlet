@@ -146,6 +146,27 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
     never "unlimited". Local `next dev` has no Vercel edge, so every
     local request shares one "unknown client" bucket -- raise
     `SCAN_LIMIT_PER_CLIENT_PER_DAY` in `.env.local` for local testing.
+  - **Report page shows each card's evidence** (`components/opportunity-card.tsx`):
+    every cited id (E1, E3...) resolved against the job's own Evidence
+    Packet -- observation, excerpt, source link -- plus every contract
+    field in PRD §8.5's order (why it matters, impact/effort rationale,
+    full experiment). PRD §8.5 also lists "assumptions"; the contract has
+    no such field, so it isn't synthesized.
+  - **Feedback + funnel events** (`lib/events.ts`, `scan_events` table,
+    migration `003_scan_events.sql`, `POST /api/scans/:id/events`), for
+    PRD §17 and the contract's Concierge Validation Plan (§4). Each card
+    has the PRD's primary **"Build this"** CTA (carries the chosen card
+    through the signup placeholder as `?card=`) and the contract's rating
+    scale: *obvious / useful / surprising / wrong / would act now*. The
+    five contract events are recorded: `scan_started` (same transaction
+    as the job), `scan_completed` (best-effort, never fails a finished
+    scan), and from the browser `report_viewed`,
+    `opportunity_feedback_submitted`, `build_this_requested`. The
+    endpoint accepts only those three (strict schema), only on a finished
+    report and a real card, and every event is idempotent per client
+    (hashed IP) -- repeats can't inflate counts; a changed rating replaces
+    the earlier one. Kept in our own Postgres (decided with Andres
+    2026-09-29), no analytics vendor yet. Queries below.
 
 ## Known limitations (v0, by design)
 
@@ -349,11 +370,12 @@ Setup steps, for a fresh environment:
    `SCAN_IP_HASH_SECRET` (any long random string -- the file shows a
    one-liner to generate one).
 4. Run the migrations in `apps/web/lib/migrations/` **in order**
-   (`001_init.sql`, then `002_scan_rate_limit.sql`) once each via
+   (`001_init.sql`, `002_scan_rate_limit.sql`, `003_scan_events.sql`)
+   once each via
    Supabase's SQL Editor (or `psql` against the direct connection). Both
    are idempotent. There's no automated migration runner for the web app
-   yet -- two hand-applied migrations still don't earn one, but a third
-   probably would.
+   yet; with three hand-applied migrations it's now worth adding one
+   before a fourth.
 5. `cd apps/web && npm run dev`, open `http://localhost:3000`, paste a
    real public URL.
 
@@ -376,6 +398,45 @@ routinely needs more than 300s (most likely: both the Scientist and the
 Reviewer needing their one corrective retry in the same run), that's the
 concrete signal to move to Pro and raise that constant to 800 -- not
 something to pre-optimize for without a real run proving it's needed.
+
+### Measuring the concierge validation (Supabase SQL Editor)
+
+Verified against a real Postgres 16. "Useful or better" is read as
+`useful`, `surprising` or `would_act_now`; `wrong` is only a *proxy* for
+the contract's false-confidence rate (a reviewer can mark a card wrong
+for reasons other than an unsupported claim) -- confirm those with the
+reviewer. Card order in a report is rank order, so `card_index < 3` is
+the top 3.
+
+```sql
+-- Funnel: distinct scans reaching each step (last 30 days)
+select event_type, count(distinct scan_job_id) as scans
+from scan_events
+where created_at > now() - interval '30 days'
+group by event_type
+order by array_position(array['scan_started','scan_completed','report_viewed',
+  'opportunity_feedback_submitted','build_this_requested'], event_type);
+
+-- Contract §4 validation thresholds, over reports that received any rating
+with rated as (
+  select scan_job_id, card_index, rating
+  from scan_events where event_type = 'opportunity_feedback_submitted'
+),
+per_report as (
+  select scan_job_id,
+    bool_or(card_index < 3 and rating in ('useful', 'surprising', 'would_act_now')) as top3_useful
+  from rated group by scan_job_id
+)
+select
+  (select count(*) from per_report) as rated_reports,
+  round(100.0 * (select count(*) filter (where top3_useful) from per_report)
+    / nullif((select count(*) from per_report), 0), 1) as top3_usefulness_pct,     -- target >= 70
+  round(100.0 * (select count(distinct scan_job_id) from scan_events where event_type = 'build_this_requested')
+    / nullif((select count(distinct scan_job_id) from scan_events where event_type = 'report_viewed'), 0), 1)
+    as build_this_intent_pct,                                                    -- target >= 30
+  round(100.0 * (select count(*) from rated where rating = 'wrong')
+    / nullif((select count(*) from rated), 0), 1) as wrong_rating_pct;           -- proxy, target < 10
+```
 
 ## What's next
 

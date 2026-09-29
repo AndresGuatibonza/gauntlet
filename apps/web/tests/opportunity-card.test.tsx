@@ -1,7 +1,13 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { render, cleanup, within } from "@testing-library/react";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { render, cleanup, within, fireEvent } from "@testing-library/react";
 import type { EvidenceItem, OpportunityCard } from "@gauntlet/core";
-import { OpportunityCardView, safeSourceLink, truncateExcerpt, MAX_EXCERPT_CHARS } from "@/components/opportunity-card";
+import {
+  OpportunityCardView,
+  safeSourceLink,
+  truncateExcerpt,
+  MAX_EXCERPT_CHARS,
+  type CardActions,
+} from "@/components/opportunity-card";
 
 afterEach(cleanup);
 
@@ -104,6 +110,60 @@ describe("OpportunityCardView", () => {
     const evil = new Map([["E1", evidence("E1", { sourceUrl: "javascript:alert(1)" })]]);
     const { container } = render(<OpportunityCardView card={card({ evidenceRefs: ["E1"] })} evidenceById={evil} />);
     expect(container.querySelector(".evidence-list a")).toBeNull();
+  });
+});
+
+describe("card actions", () => {
+  function actions(overrides: Partial<CardActions> = {}): CardActions {
+    return { rating: null, feedbackError: null, onRate: vi.fn(), onBuildThis: vi.fn(), ...overrides };
+  }
+
+  it("renders no actions when none are passed (presentational use)", () => {
+    const { queryByText, queryByRole } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} />);
+    expect(queryByText("Build this", { exact: false })).toBeNull();
+    expect(queryByRole("group", { name: "Rate this opportunity" })).toBeNull();
+  });
+
+  it("reports Build this clicks and each of the five contract ratings", () => {
+    const a = actions();
+    const { getByText, getByRole } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} actions={a} />);
+    fireEvent.click(getByText("Build this", { exact: false }));
+    expect(a.onBuildThis).toHaveBeenCalledTimes(1);
+
+    const group = within(getByRole("group", { name: "Rate this opportunity" }));
+    const expected = [
+      ["Obvious", "obvious"],
+      ["Useful", "useful"],
+      ["Surprising", "surprising"],
+      ["Wrong", "wrong"],
+      ["Would act now", "would_act_now"],
+    ] as const;
+    for (const [label, value] of expected) {
+      fireEvent.click(group.getByRole("button", { name: label }));
+      expect(a.onRate).toHaveBeenLastCalledWith(value);
+    }
+    expect(a.onRate).toHaveBeenCalledTimes(5);
+  });
+
+  it("marks only the selected rating as pressed and shows a save error", () => {
+    const { getByRole, getByText } = render(
+      <OpportunityCardView
+        card={card()}
+        evidenceById={EVIDENCE}
+        actions={actions({ rating: "useful", feedbackError: "Couldn't save your rating. Please try again." })}
+      />,
+    );
+    expect(getByRole("button", { name: "Useful" }).getAttribute("aria-pressed")).toBe("true");
+    expect(getByRole("button", { name: "Wrong" }).getAttribute("aria-pressed")).toBe("false");
+    expect(getByText("Couldn't save your rating.", { exact: false })).toBeTruthy();
+  });
+
+  it("styles Build this as the primary CTA on the hero card only", () => {
+    const hero = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} actions={actions()} />);
+    expect(hero.getByText("Build this", { exact: false }).className).toBe("");
+    cleanup();
+    const other = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} actions={actions()} />);
+    expect(other.getByText("Build this", { exact: false }).className).toBe("secondary");
   });
 });
 
