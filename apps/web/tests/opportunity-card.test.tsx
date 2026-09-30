@@ -115,7 +115,14 @@ describe("OpportunityCardView", () => {
 
 describe("card actions", () => {
   function actions(overrides: Partial<CardActions> = {}): CardActions {
-    return { rating: null, feedbackError: null, onRate: vi.fn(), onBuildThis: vi.fn(), ...overrides };
+    return {
+      rating: null,
+      feedbackError: null,
+      onRate: vi.fn(),
+      onBuildThis: vi.fn(),
+      onSectionOpened: vi.fn(),
+      ...overrides,
+    };
   }
 
   it("renders no actions when none are passed (presentational use)", () => {
@@ -156,6 +163,31 @@ describe("card actions", () => {
     expect(getByRole("button", { name: "Useful" }).getAttribute("aria-pressed")).toBe("true");
     expect(getByRole("button", { name: "Wrong" }).getAttribute("aria-pressed")).toBe("false");
     expect(getByText("Couldn't save your rating.", { exact: false })).toBeTruthy();
+  });
+
+  it("reports opening Evidence and Proposed experiment, once per open, not on close", () => {
+    const a = actions();
+    const { getByText } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} actions={a} />);
+    const evidence = getByText("Evidence (2)");
+    const experiment = getByText("Proposed experiment");
+
+    fireEvent.click(evidence); // closed -> opening
+    expect(a.onSectionOpened).toHaveBeenLastCalledWith("evidence");
+    (evidence.parentElement as HTMLDetailsElement).open = true; // jsdom doesn't toggle on click
+    fireEvent.click(evidence); // open -> closing: not an "opened" event
+    expect(a.onSectionOpened).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(experiment);
+    expect(a.onSectionOpened).toHaveBeenLastCalledWith("experiment");
+    expect(a.onSectionOpened).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not count the hero's pre-opened Evidence as viewed until the visitor opens it", () => {
+    const a = actions();
+    const { getByText } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} actions={a} />);
+    expect(a.onSectionOpened).not.toHaveBeenCalled();
+    fireEvent.click(getByText("Evidence (2)")); // already open -> this click closes it
+    expect(a.onSectionOpened).not.toHaveBeenCalled();
   });
 
   it("styles Build this as the primary CTA on the hero card only", () => {

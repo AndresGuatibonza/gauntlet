@@ -88,8 +88,9 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
    - `reviewing`: Reviewer call.
    - `done`: report and review records stored, `scan_completed` recorded
      (best effort; a failed event write never fails a finished scan).
-   - Any error at any stage sets `failed` with a specific message; a job is
-     never left stuck in an intermediate status.
+   - Any error at any stage sets `failed` with a specific message and
+     records `scan_failed` (one `failJob` helper for every failure path); a
+     job is never left stuck in an intermediate status.
 4. **Report page.** Polls `GET /api/scans/:id` every 2.5 s. The tracker
    advances at most one stage every 700 ms so fast stages are still shown
    in order. On `done` it renders the cards, the "Best next experiment"
@@ -97,7 +98,10 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 5. **Interaction.** Each card has a "Build this" button (records
    `build_this_requested` and goes to the signup placeholder with the card)
    and a rating: obvious / useful / surprising / wrong / would act now
-   (records `opportunity_feedback_submitted`).
+   (records `opportunity_feedback_submitted`). Opening a card's Evidence or
+   Proposed experiment records `evidence_viewed` / `opportunity_opened`,
+   and "Make this recommendation smarter" records
+   `deepen_analysis_clicked`.
 
 A real scan in production takes about 2–3 minutes; the Vercel function
 limit is 300 s (`maxDuration` on the Hobby plan).
@@ -118,15 +122,22 @@ index. The client IP is stored only as HMAC-SHA256 keyed with
 `SCAN_IP_HASH_SECRET`, never in clear text.
 
 **`003_scan_events.sql` — `scan_events`**: one row per funnel event.
-`event_type` is one of the five events named in the contract's validation
-plan: `scan_started`, `scan_completed`, `report_viewed`,
-`opportunity_feedback_submitted`, `build_this_requested`. Card events carry
+As created, `event_type` is one of the five events named in the
+contract's validation plan: `scan_started`, `scan_completed`,
+`report_viewed`, `opportunity_feedback_submitted`, `build_this_requested`
+(004 adds four more). Card events carry
 `card_index` (rank position) and a `card_title` snapshot; ratings carry
 `rating`. A unique index on (scan, type, card, client hash) makes every
 event idempotent per client; a new rating from the same client replaces
 the earlier one. Check constraints reject a rating on a non-feedback
 event, a card index on a non-card event, and unknown types. Rows cascade
 on job deletion.
+
+**`004_more_scan_events.sql`**: widens the two check constraints for four
+more events from PRD §11: `scan_failed` (server), `deepen_analysis_clicked`
+(report-level), `evidence_viewed` and `opportunity_opened` (card events).
+PRD's `build_this_clicked` is `build_this_requested` here. Existing rows
+satisfy the new constraints.
 
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
@@ -139,7 +150,7 @@ intent, `wrong` ratings as a proxy for false confidence).
   var. Clients are identified by `x-real-ip`, which Vercel overwrites to
   prevent spoofing. Missing or invalid quota configuration makes the
   endpoint refuse scans (500) instead of running without limits.
-- **Event endpoint**: strict schema (only the three browser events; a
+- **Event endpoint**: strict schema (only the report-page events; a
   client cannot send server events or set its own identity), accepted only
   for a finished report and an existing card, idempotent per client.
 - **Rendering**: evidence source links are rendered only for `http(s)`
@@ -187,8 +198,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 115 tests:
-CLI 5, core 56, web 54). `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 120 tests:
+CLI 5, core 56, web 59). `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -226,8 +237,8 @@ expected to be clean.
 2. **No Postgres in CI**: the SQL guarantees above are not re-checked
    automatically. First CI improvement: a Postgres service container
    running those scenarios.
-3. **No migration runner**: three hand-applied migrations; add a runner
-   with a `schema_migrations` table before a fourth.
+3. **No migration runner**: four hand-applied migrations; add a runner
+   with a `schema_migrations` table before a fifth.
 4. **No data-retention policy** (PRD §18): `scan_jobs` and `scan_events`
    are kept indefinitely.
 5. **IP-based quota**: shared IPs share a quota and IPv6 rotation can

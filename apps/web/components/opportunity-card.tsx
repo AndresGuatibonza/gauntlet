@@ -55,11 +55,15 @@ export function safeSourceLink(url: string): { href: string; label: string } | n
   }
 }
 
+export type CardSection = "evidence" | "experiment";
+
 export interface CardActions {
   rating: CardRating | null;
   feedbackError: string | null;
   onRate: (rating: CardRating) => void;
   onBuildThis: () => void;
+  /** The visitor opened a collapsed section (not fired for one already open). */
+  onSectionOpened: (section: CardSection) => void;
 }
 
 export function OpportunityCardView({
@@ -73,6 +77,16 @@ export function OpportunityCardView({
   evidenceById: ReadonlyMap<string, EvidenceItem>;
   actions?: CardActions;
 }): React.JSX.Element {
+  // Fires on the click that OPENS a section, read before the browser toggles
+  // it. Deliberately not the <details> "toggle" event: that also fires for a
+  // section rendered open (the hero's Evidence), which nobody opened.
+  function openHandler(section: CardSection) {
+    return (e: React.MouseEvent<HTMLElement>): void => {
+      const details = e.currentTarget.parentElement;
+      if (actions && details instanceof HTMLDetailsElement && !details.open) actions.onSectionOpened(section);
+    };
+  }
+
   return (
     <div className={isHero ? "card hero" : "card"}>
       {isHero && <span className="badge">Best next experiment</span>}
@@ -126,7 +140,9 @@ export function OpportunityCardView({
       </div>
 
       <details style={{ marginTop: 16 }} open={isHero}>
-        <summary style={{ cursor: "pointer" }}>Evidence ({card.evidenceRefs.length})</summary>
+        <summary style={{ cursor: "pointer" }} onClick={openHandler("evidence")}>
+          Evidence ({card.evidenceRefs.length})
+        </summary>
         <ol className="evidence-list">
           {card.evidenceRefs.map((ref) => (
             <EvidenceEntry key={ref} refId={ref} item={evidenceById.get(ref)} />
@@ -135,7 +151,9 @@ export function OpportunityCardView({
       </details>
 
       <details style={{ marginTop: 12 }}>
-        <summary style={{ cursor: "pointer" }}>Proposed experiment</summary>
+        <summary style={{ cursor: "pointer" }} onClick={openHandler("experiment")}>
+          Proposed experiment
+        </summary>
         <dl className="experiment">
           <dt>Control</dt>
           <dd>{card.experiment.control}</dd>

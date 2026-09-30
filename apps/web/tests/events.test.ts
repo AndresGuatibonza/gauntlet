@@ -7,21 +7,28 @@ const doneJob = {
 };
 
 describe("contract vocabulary", () => {
-  it("uses exactly the five events and five ratings named in contract §4", () => {
+  it("uses the contract §4 events plus the PRD §11 events that have a feature today", () => {
     expect(SCAN_EVENT_TYPES).toEqual([
       "scan_started",
       "scan_completed",
+      "scan_failed",
       "report_viewed",
+      "opportunity_opened",
+      "evidence_viewed",
       "opportunity_feedback_submitted",
       "build_this_requested",
+      "deepen_analysis_clicked",
     ]);
     expect(CARD_RATINGS).toEqual(["obvious", "useful", "surprising", "wrong", "would_act_now"]);
   });
 });
 
 describe("ClientEventSchema", () => {
-  it("accepts the three browser events", () => {
+  it("accepts the browser events", () => {
     expect(ClientEventSchema.safeParse({ type: "report_viewed" }).success).toBe(true);
+    expect(ClientEventSchema.safeParse({ type: "deepen_analysis_clicked" }).success).toBe(true);
+    expect(ClientEventSchema.safeParse({ type: "evidence_viewed", cardIndex: 0 }).success).toBe(true);
+    expect(ClientEventSchema.safeParse({ type: "opportunity_opened", cardIndex: 1 }).success).toBe(true);
     expect(
       ClientEventSchema.safeParse({ type: "opportunity_feedback_submitted", cardIndex: 0, rating: "useful" }).success,
     ).toBe(true);
@@ -31,6 +38,9 @@ describe("ClientEventSchema", () => {
   it.each([
     [{ type: "scan_started" }, "server-only event"],
     [{ type: "scan_completed" }, "server-only event"],
+    [{ type: "scan_failed" }, "server-only event"],
+    [{ type: "evidence_viewed" }, "card event without a card"],
+    [{ type: "deepen_analysis_clicked", cardIndex: 0 }, "report event with a card"],
     [{ type: "opportunity_feedback_submitted", cardIndex: 0, rating: "meh" }, "unknown rating"],
     [{ type: "opportunity_feedback_submitted", cardIndex: 0 }, "missing rating"],
     [{ type: "build_this_requested" }, "missing card"],
@@ -50,6 +60,8 @@ describe("validateClientEvent", () => {
       cardTitle: "Card B",
     });
     expect(validateClientEvent({ type: "report_viewed" }, doneJob)).toEqual({ ok: true, cardTitle: null });
+    expect(validateClientEvent({ type: "deepen_analysis_clicked" }, doneJob)).toEqual({ ok: true, cardTitle: null });
+    expect(validateClientEvent({ type: "evidence_viewed", cardIndex: 2 }, doneJob)).toEqual({ ok: true, cardTitle: "Card C" });
   });
 
   it("rejects events on a report that isn't finished", () => {
@@ -67,5 +79,9 @@ describe("validateClientEvent", () => {
     expect(
       validateClientEvent({ type: "opportunity_feedback_submitted", cardIndex: 3, rating: "wrong" }, doneJob),
     ).toMatchObject({ ok: false, status: 422 });
+    expect(validateClientEvent({ type: "opportunity_opened", cardIndex: 9 }, doneJob)).toMatchObject({
+      ok: false,
+      status: 422,
+    });
   });
 });

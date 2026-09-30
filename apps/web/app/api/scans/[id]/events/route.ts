@@ -2,8 +2,8 @@
  * POST /api/scans/:id/events -- funnel events + per-card feedback sent by
  * the report page (lib/events.ts). Public and unauthenticated like the
  * rest of the pre-auth flow, so:
- *   - the body is a strict whitelist (only report_viewed, feedback and
- *     build_this_requested; scan_started/scan_completed are server-only),
+ *   - the body is a strict whitelist (lib/events.ts ClientEventSchema;
+ *     scan_started/scan_completed/scan_failed are server-only),
  *   - the event must match a finished report and a real card in it,
  *   - every event is idempotent per client (hashed IP), so repeating it
  *     can't inflate counts.
@@ -56,7 +56,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     await recordScanEvent({
       scanJobId: id,
       type: event.type,
-      cardIndex: event.type === "report_viewed" ? undefined : event.cardIndex,
+      cardIndex: "cardIndex" in event ? event.cardIndex : undefined,
       cardTitle: check.cardTitle,
       rating: event.type === "opportunity_feedback_submitted" ? event.rating : undefined,
       clientIpHash,

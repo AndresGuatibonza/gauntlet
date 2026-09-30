@@ -16,7 +16,7 @@ import { motion } from "framer-motion";
 import type { EvidenceItem, EvidencePacket, OpportunityCard, ReviewRecord } from "@gauntlet/core";
 import { FadeUp, StaggerItem, StaggerList } from "@/components/motion";
 import { StatusTracker, useSteppedStage } from "@/components/status-tracker";
-import { OpportunityCardView, type CardActions } from "@/components/opportunity-card";
+import { OpportunityCardView, type CardActions, type CardSection } from "@/components/opportunity-card";
 import type { CardRating, ClientEvent } from "@/lib/events";
 
 type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
@@ -73,6 +73,9 @@ export default function ScanReportPage(): React.JSX.Element {
   const [ratings, setRatings] = useState<Record<number, CardRating>>({});
   const [feedbackErrors, setFeedbackErrors] = useState<Record<number, string>>({});
   const reportViewedSent = useRef(false);
+  // "cardIndex:section" keys already sent this page load; the server dedupes
+  // per client anyway, this only avoids repeat requests.
+  const openedSections = useRef(new Set<string>());
 
   const isDone = job?.status === "done" && job.opportunityReport !== null;
   useEffect(() => {
@@ -99,8 +102,17 @@ export default function ScanReportPage(): React.JSX.Element {
     router.push(`/signup?from=${params.id}&card=${cardIndex}`);
   }
 
+  function sectionOpened(cardIndex: number, section: CardSection): void {
+    const key = `${cardIndex}:${section}`;
+    if (openedSections.current.has(key)) return;
+    openedSections.current.add(key);
+    const type = section === "evidence" ? "evidence_viewed" : "opportunity_opened";
+    void sendScanEvent(params.id, { type, cardIndex });
+  }
+
   function actionsFor(cardIndex: number): CardActions {
     return {
+      onSectionOpened: (section) => sectionOpened(cardIndex, section),
       rating: ratings[cardIndex] ?? null,
       feedbackError: feedbackErrors[cardIndex] ?? null,
       onRate: (rating) => rateCard(cardIndex, rating),
@@ -214,7 +226,10 @@ export default function ScanReportPage(): React.JSX.Element {
       )}
 
       <FadeUp delay={0.25}>
-        <Link href={`/signup?from=${job.id}`}>
+        <Link
+          href={`/signup?from=${job.id}`}
+          onClick={() => void sendScanEvent(params.id, { type: "deepen_analysis_clicked" }, true)}
+        >
           <motion.button style={{ marginTop: 20 }} whileTap={{ scale: 0.97 }}>
             Make this recommendation smarter &#8594;
           </motion.button>

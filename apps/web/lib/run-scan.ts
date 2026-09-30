@@ -22,6 +22,7 @@ import {
   extractPage,
   buildEvidencePacket,
   type PageScanResult,
+  type EvidencePacket,
   EvidencePacketSchema,
   hasInsufficientEvidence,
   describeInsufficientEvidence,
@@ -60,10 +61,7 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
     if (!parsedPacket.success) {
       // Same invariant the CLI enforces: never persist or hand to the
       // Scientist a packet that fails its own contract.
-      await updateScanJob(jobId, {
-        status: "failed",
-        errorMessage: `Internal error: built Evidence Packet failed contract validation: ${parsedPacket.error.message}`,
-      });
+      await failJob(jobId, `Internal error: built Evidence Packet failed contract validation: ${parsedPacket.error.message}`);
       return;
     }
 
@@ -73,11 +71,7 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
     // misleading "evidenceRefs must contain at least 1 element" error. The
     // packet is still stored so the failure can be inspected afterwards.
     if (hasInsufficientEvidence(parsedPacket.data)) {
-      await updateScanJob(jobId, {
-        status: "failed",
-        evidencePacket: parsedPacket.data,
-        errorMessage: describeInsufficientEvidence(parsedPacket.data),
-      });
+      await failJob(jobId, describeInsufficientEvidence(parsedPacket.data), { evidencePacket: parsedPacket.data });
       return;
     }
 
@@ -87,10 +81,7 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
     try {
       llmClient = createAnthropicLlmClient();
     } catch (err) {
-      await updateScanJob(jobId, {
-        status: "failed",
-        errorMessage: err instanceof Error ? err.message : String(err),
-      });
+      await failJob(jobId, err instanceof Error ? err.message : String(err));
       return;
     }
 
@@ -98,7 +89,7 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
     try {
       scientistReport = await generateOpportunityReport(parsedPacket.data, llmClient);
     } catch (err) {
-      await updateScanJob(jobId, { status: "failed", errorMessage: describeStageError("Scientist", err) });
+      await failJob(jobId, describeStageError("Scientist", err));
       return;
     }
 
@@ -117,21 +108,32 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
         console.error("[run-scan] could not record scan_completed:", eventErr);
       });
     } catch (err) {
-      await updateScanJob(jobId, { status: "failed", errorMessage: describeStageError("Reviewer", err) });
+      await failJob(jobId, describeStageError("Reviewer", err));
     }
   } catch (err) {
     // Catch-all: a failure in fetching/discovery itself (not caught by the
     // more specific blocks above) still has to land the job in "failed"
     // rather than leaving it stuck at "queued"/"scanning" forever.
-    await updateScanJob(jobId, {
-      status: "failed",
-      errorMessage: err instanceof Error ? err.message : String(err),
-    }).catch(() => {
+    await failJob(jobId, err instanceof Error ? err.message : String(err)).catch(() => {
       // If even the failure write fails (e.g. the DB connection itself is
       // down), there's nothing further to do from inside a background
       // after() callback -- there's no request left to report to.
     });
   }
+}
+
+/**
+ * The single way a job ends in "failed": stores the message (and, when
+ * given, the packet for later inspection) and records the scan_failed
+ * funnel event. The event write is best-effort -- analytics must never
+ * mask or replace the real failure -- but the status update is not: if it
+ * throws, the caller's catch-all still sees it.
+ */
+async function failJob(jobId: string, errorMessage: string, extra: { evidencePacket?: EvidencePacket } = {}): Promise<void> {
+  await updateScanJob(jobId, { status: "failed", errorMessage, ...extra });
+  await recordScanEvent({ scanJobId: jobId, type: "scan_failed" }).catch((eventErr) => {
+    console.error("[run-scan] could not record scan_failed:", eventErr);
+  });
 }
 
 function describeStageError(stage: "Scientist" | "Reviewer", err: unknown): string {

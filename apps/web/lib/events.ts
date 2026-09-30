@@ -6,18 +6,28 @@
  * for (top-3 usefulness, action intent, false-confidence rate) can be
  * computed straight from scan_events -- see the README for the queries.
  *
- * scan_started / scan_completed are written by the server itself
- * (store.ts, run-scan.ts). Only the three report-page events below can be
- * sent by the browser, and each is validated against the job it names.
+ * Four more come from PRD §11's V0 list (migration 004): scan_failed,
+ * deepen_analysis_clicked, evidence_viewed and opportunity_opened. PRD's
+ * build_this_clicked is recorded under the contract's name,
+ * build_this_requested.
+ *
+ * scan_started / scan_completed / scan_failed are written by the server
+ * itself (store.ts, run-scan.ts). Only the report-page events in
+ * ClientEventSchema can be sent by the browser, and each is validated
+ * against the job it names.
  */
 import { z } from "zod";
 
 export const SCAN_EVENT_TYPES = [
   "scan_started",
   "scan_completed",
+  "scan_failed",
   "report_viewed",
+  "opportunity_opened",
+  "evidence_viewed",
   "opportunity_feedback_submitted",
   "build_this_requested",
+  "deepen_analysis_clicked",
 ] as const;
 export type ScanEventType = (typeof SCAN_EVENT_TYPES)[number];
 
@@ -38,6 +48,9 @@ const CardIndexSchema = z.number().int().min(0).max(49);
 /** The only events a browser may send. */
 export const ClientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("report_viewed") }).strict(),
+  z.object({ type: z.literal("deepen_analysis_clicked") }).strict(),
+  z.object({ type: z.literal("opportunity_opened"), cardIndex: CardIndexSchema }).strict(),
+  z.object({ type: z.literal("evidence_viewed"), cardIndex: CardIndexSchema }).strict(),
   z
     .object({
       type: z.literal("opportunity_feedback_submitted"),
@@ -67,7 +80,7 @@ export function validateClientEvent(event: ClientEvent, job: EventTargetJob): Ev
   if (job.status !== "done" || !job.opportunityReport) {
     return { ok: false, status: 409, error: "This scan has no finished report yet." };
   }
-  if (event.type === "report_viewed") return { ok: true, cardTitle: null };
+  if (!("cardIndex" in event)) return { ok: true, cardTitle: null };
 
   const card = job.opportunityReport.cards[event.cardIndex];
   if (!card) {

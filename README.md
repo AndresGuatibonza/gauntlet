@@ -165,11 +165,20 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
     as the job), `scan_completed` (best-effort, never fails a finished
     scan), and from the browser `report_viewed`,
     `opportunity_feedback_submitted`, `build_this_requested`. The
-    endpoint accepts only those three (strict schema), only on a finished
-    report and a real card, and every event is idempotent per client
-    (hashed IP) -- repeats can't inflate counts; a changed rating replaces
-    the earlier one. Kept in our own Postgres (decided with Andres
-    2026-09-29), no analytics vendor yet. Queries below.
+    endpoint accepts only browser events (strict schema), only on a
+    finished report and a real card, and every event is idempotent per
+    client (hashed IP) -- repeats can't inflate counts; a changed rating
+    replaces the earlier one. Kept in our own Postgres, no analytics
+    vendor yet. Queries below.
+  - **More PRD §11 events** (migration `004_more_scan_events.sql`):
+    `scan_failed` (every pipeline failure path goes through one
+    `failJob` helper that records it), `deepen_analysis_clicked` ("Make
+    this recommendation smarter"), `evidence_viewed` and
+    `opportunity_opened` (the visitor opens a card's Evidence or Proposed
+    experiment section; counted on the opening click, so the hero's
+    pre-opened Evidence isn't counted until someone opens it). PRD's
+    `build_this_clicked` is recorded as `build_this_requested`. Signup,
+    GitHub, source and experiment events wait for those features.
 
 ## Known limitations (v0, by design)
 
@@ -373,12 +382,11 @@ Setup steps, for a fresh environment:
    `SCAN_IP_HASH_SECRET` (any long random string -- the file shows a
    one-liner to generate one).
 4. Run the migrations in `apps/web/lib/migrations/` **in order**
-   (`001_init.sql`, `002_scan_rate_limit.sql`, `003_scan_events.sql`)
-   once each via
+   (`001_init.sql`, `002_scan_rate_limit.sql`, `003_scan_events.sql`,
+   `004_more_scan_events.sql`) once each via
    Supabase's SQL Editor (or `psql` against the direct connection). Both
    are idempotent. There's no automated migration runner for the web app
-   yet; with three hand-applied migrations it's now worth adding one
-   before a fourth.
+   yet; with four hand-applied migrations, add one before a fifth.
 5. `cd apps/web && npm run dev`, open `http://localhost:3000`, paste a
    real public URL.
 
@@ -417,8 +425,10 @@ select event_type, count(distinct scan_job_id) as scans
 from scan_events
 where created_at > now() - interval '30 days'
 group by event_type
-order by array_position(array['scan_started','scan_completed','report_viewed',
-  'opportunity_feedback_submitted','build_this_requested'], event_type);
+order by array_position(array['scan_started','scan_completed','scan_failed',
+  'report_viewed','opportunity_opened','evidence_viewed',
+  'opportunity_feedback_submitted','build_this_requested',
+  'deepen_analysis_clicked'], event_type);
 
 -- Contract §4 validation thresholds, over reports that received any rating
 with rated as (
