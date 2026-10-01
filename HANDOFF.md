@@ -20,6 +20,7 @@ validation on real products:
 | #2 Product Scientist v0 + Reviewer/Critic | Two Claude calls: generate cards, then review them | `packages/core` |
 | #3 Pre-auth Report UI | Public web app: scan without an account, see the report | `apps/web` |
 | Additions | Scan quota, cited evidence on cards, "Build this" CTA, card ratings, funnel events, light/dark themes | `apps/web` |
+| Contract Amendment 1 | The product's own AI traces from a local Token Profiler as citable evidence (`A1, A2...`), CLI only | `packages/core`, `packages/cli` |
 
 Not started (by PRD sequencing): GitHub deep scan (#4), "Build this"
 implementation packages (#5), production data adapters (#6), Experiment
@@ -32,7 +33,7 @@ npm workspaces monorepo, TypeScript (ESM) throughout.
 ```
 packages/core   Framework-agnostic pipeline. No build step: package
                 exports point at src/index.ts and consumers compile it.
-packages/cli    Local CLI (`scan`, `analyze`) with SQLite storage.
+packages/cli    Local CLI (`scan`, `analyze [--token-profiler]`) with SQLite storage.
 apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 ```
 
@@ -44,10 +45,11 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `page-discovery.ts` | From the homepage, follows same-origin links whose path or text matches keywords (pricing, plans, docs, help, faq, support, product, features, about...), up to 8 pages. Records unreachable pages with their reason. |
 | `extractor.ts` | Static-HTML extraction with cheerio (no JavaScript execution). Emits evidence items of type `copy`, `ui_structure`, `cta_placement` and `pricing` (pricing only with a billing unit, so a bare "$100" is not counted). |
 | `normalizer.ts` | Builds the Evidence Packet: product identity, surface map, evidence items with ids (E1, E2...), confidence metadata, and candidate pricing contradictions flagged for human review, never auto-resolved. |
-| `evidence-packet.ts` | Zod schema for the packet, plus `hasInsufficientEvidence` / `describeInsufficientEvidence` (the zero-evidence guard). |
+| `evidence-packet.ts` | Zod schema for the packet, plus `hasInsufficientEvidence` / `describeInsufficientEvidence` (the zero-evidence guard). Cross-field rules: `aiEvidence` is populated exactly when `sourceReliability` is `public_scan_plus_ai_traces`, and every citable id (E* and A*) is unique. `citableEvidenceIds()` lists them. |
+| `token-profiler-adapter.ts` | Contract §1.6. `readTokenProfiler()` reads a local Token Profiler's HTTP API (sessions, events, flags, context analysis), validating every response. `buildAiEvidence()` deterministically maps it to `aiEvidence` items (usage profile, failure rate, one item per fired flag, context repetition) plus a `notEvaluable` list. `attachAiEvidence()` returns an enriched copy of a packet. |
 | `opportunity-card.ts` | Zod schema for cards and reports; `computeRankScore = impact × evidenceQuality ÷ effort` (each 1–3). |
 | `llm-client.ts` | Anthropic SDK wrapper. Model `claude-sonnet-5`, `max_tokens` 16000 (the model spends part of the budget on thinking before the text block; 4096 truncated real responses). Honors `NODE_EXTRA_CA_CERTS` for TLS-intercepting networks. |
-| `scientist.ts` | First Claude call. Must return 3–5 cards, exactly one `build_this`, and cite only evidence ids that exist in the packet. Invalid output gets one corrective retry with the exact validation error. Cards are ranked by `rankScore`. |
+| `scientist.ts` | First Claude call. Must return 3–5 cards, exactly one `build_this`, and cite only evidence ids that exist in the packet (E*, and A* when the packet carries AI evidence). Invalid output gets one corrective retry with the exact validation error. Cards are ranked by `rankScore`. |
 | `reviewer.ts` | Second Claude call. Applies the contract's four-question checklist to each card: `pass`, `downgrade_confidence` (can only lower, and lowers the evidence-quality score with it) or `drop`. Re-ranks survivors and re-promotes the top one to `build_this` if the original was dropped. Fails if every card is dropped. One corrective retry. |
 
 **`apps/web`**
@@ -68,6 +70,14 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `components/status-tracker.tsx` | Stage indicator (queued → scanning → analyzing → reviewing). |
 | `components/theme-toggle.tsx` | Light/dark switch. |
 | `app/globals.css` | Design tokens for both themes and all component styles. |
+
+**`packages/cli`**
+
+| Path | Responsibility |
+|---|---|
+| `src/index.ts` | `scan` and `analyze` commands. |
+| `src/token-profiler-option.ts` | `--token-profiler` flags → a validated query (window, connectors; coding-agent connectors refused), and the enrichment step that saves the new packet. |
+| `src/store/sqlite.ts` | SQLite store with inline, tracked migrations (`001_init`, `002_opportunity_reports`, `003_packet_lineage`). |
 
 ## 3. How a scan works
 
@@ -105,6 +115,44 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 
 A real scan in production takes about 2–3 minutes; the Vercel function
 limit is 300 s (`maxDuration` on the Hobby plan).
+
+### Adding the product's AI traces (CLI only)
+
+`gauntlet analyze <packetId> --token-profiler http://localhost:4317 --tp-connector <name> [--tp-since] [--tp-until]`:
+
+1. Flags are validated before anything is read: a URL, at least one
+   connector, no coding-agent connector (`claude-code`,
+   `claude-code-desktop`, `codex-cli`, `codex-desktop`, `opencode`), and a
+   valid window (default: the 30 days ending now; date-only bounds cover
+   the whole UTC day). The Claude client is created next, so a missing
+   key fails before anything is saved.
+2. The adapter lists each connector's sessions, keeps those that
+   *started* in the window (newest first, at most 500), and reads each
+   one's events, flags and context analysis. A session that can't be read
+   is skipped and named in `notEvaluable`; if none can be read, the run
+   stops.
+3. `buildAiEvidence()` produces, in order: `A1` usage profile (tokens by
+   provider/model), `A2` failure rate, one `anomaly_flag` per fired flag
+   (sessions affected, observed range, threshold, example session ids),
+   and `context_repetition` (re-sent tokens by component type). Confidence
+   is `high` only when the token counts are provider-reported or exactly
+   derived; context attribution is always `medium`. Only aggregates,
+   flags and component types with token counts are kept: no prompt or
+   response content, no component hashes.
+4. `notEvaluable` names each Token Profiler check that could not run on
+   this data, using Token Profiler's own preconditions: `SESSION_OUTLIER`
+   needs 20 other sessions per connector; `INPUT_BLOAT` / `OUTPUT_BLOAT`
+   need 20 comparable invocations per model; `REASONING_HEAVY` needs
+   reasoning tokens; `RETRY_HEAVY` needs attempt numbers;
+   `CONTEXT_REPEAT`, `HISTORY_BLOAT` and `SCHEMA_BLOAT` need context
+   components of the right type.
+5. The enriched copy (`sourceReliability: public_scan_plus_ai_traces`, the
+   coverage appended to `missingEvidenceSummary`) is validated against the
+   contract and saved as a new packet with `derived_from_packet_id`
+   pointing at the original, which is never modified. The Scientist and
+   Reviewer then run on the new packet; both see the AI evidence and its
+   `notEvaluable` list, and the Reviewer's first checklist question fails a
+   card that treats partial trace coverage as complete.
 
 ## 4. Data model (Postgres)
 
@@ -198,12 +246,20 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 120 tests:
-CLI 5, core 56, web 59). `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 160 tests:
+CLI 21, core 83, web 59). `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
   Reviewer and the zero-evidence guard, with fakes for HTTP and Claude.
+- Token Profiler integration: the adapter against a fake HTTP API (window
+  filtering, every failure mode, partial session failures), the evidence
+  builder's numbers and `notEvaluable` rules, the packet schema's
+  cross-field rules, A* citations in the Scientist and Reviewer, the CLI
+  flag validation, the enrichment's lineage and the `003` migration on an
+  existing database. Verified end to end against a real Token Profiler
+  build loaded with 114 synthetic product invocations, up to the Claude
+  call.
 - `apps/web`: component tests with jsdom and Testing Library (status
   tracker, cards and their actions, theme switch) and unit tests for the
   quota and event validation.
@@ -225,6 +281,10 @@ expected to be clean.
 | Quota counted from Postgres, no new service | Bounded cost on a public endpoint without adding infrastructure; numbers sized to a 10–20-product validation round. |
 | IPs stored as keyed HMAC | An unkeyed hash of an IPv4 address can be brute-forced; data retention is still undefined. |
 | Events and ratings in the app's own Postgres | No analytics vendor before validation; PostHog remains the PRD's candidate first data adapter. |
+| Token Profiler integration through the CLI only | The hosted app cannot reach a local dashboard, and trace-derived evidence must not appear in public reports (PRD §8.6). |
+| A new packet for trace-enriched analysis | The public-scan packet stays a faithful record of the public scan; lineage links the two. |
+| Deterministic trace adapter, no LLM summarization | Every A* number is reproducible from Token Profiler's data. |
+| `notEvaluable` instead of silence | An unevaluated check must not read as "no problem found". |
 | `@gauntlet/core` has no build step | Next.js transpiles it (`transpilePackages`); one source of truth for CLI and web. |
 
 ## 10. Known limitations and risks
@@ -251,6 +311,12 @@ expected to be clean.
    corrective retries could approach it; move to Pro (800 s) only if a real
    run shows it.
 8. **Signup is a placeholder**: it only carries the scan and card ids.
+9. **Token Profiler coverage**: AI evidence covers only the chosen
+   connectors and window, and at most 500 sessions. Token Profiler has no
+   date filter, so every session of a connector is listed and filtered
+   locally. Product traces must arrive through a non-coding-agent
+   connector (`opentelemetry`, `file`, `hermes`); not yet run against a
+   real product's traces.
 
 ## 11. Next steps (PRD order)
 

@@ -99,6 +99,22 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
   always holds after review.
 - **CLI** (`packages/cli`) -- `gauntlet scan <url>` (Build Order #1),
   `gauntlet analyze <packetId>` (Build Order #2), local-first SQLite.
+- **Token Profiler adapter** (`packages/core/src/token-profiler-adapter.ts`,
+  evidence contract Amendment 1) -- `gauntlet analyze <packetId>
+  --token-profiler <url>` reads the scanned product's own AI traces from a
+  local Token Profiler dashboard (read-only HTTP API) and turns them into
+  contract §1.6 `aiEvidence` with citable ids `A1, A2...`: a usage
+  profile, a failure rate, one item per deterministic flag that fired,
+  and context repetition by component type. Deterministic: no LLM touches
+  the trace data before the Scientist. Checks Token Profiler could not
+  run on this data (too few comparable samples, no reasoning tokens, no
+  context components...) are listed in `notEvaluable` so the Scientist
+  and Reviewer never read an unevaluated check as "no problem". The
+  public-scan packet is never modified: the enriched copy is saved as a
+  new packet (`sourceReliability: public_scan_plus_ai_traces`, linked by
+  `evidence_packets.derived_from_packet_id`) and analyzed instead. CLI
+  only -- the hosted web app cannot reach a local dashboard and never
+  shows trace-derived evidence (PRD §8.6).
 - **Web app** (`apps/web`, Build Order #3) -- landing page (paste a
   public URL, no account), an async job API, and a polling report page.
   Architecture, decided with Andres before writing code:
@@ -218,6 +234,14 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
   fakes -- there's no Postgres in CI. The quota's SQL was verified
   against a real local Postgres 16 during development, not by a
   committed test.
+- Token Profiler AI evidence covers only the connectors and date window
+  given; it carries aggregates, flags and component *types* with token
+  counts -- never prompt/response content or component hashes. Sessions
+  are selected by start time; at most the 500 most recent sessions in the
+  window are read (any cut is listed in `notEvaluable`). Coding-agent
+  connectors (`claude-code`, `claude-code-desktop`, `codex-cli`,
+  `codex-desktop`, `opencode`) are refused: their sessions are a team's
+  own tool usage, not the product's AI behavior.
 - `eslint`'s `no-undef` rule is turned off repo-wide (see
   `.eslintrc.json`). `@typescript-eslint/parser` without
   `eslint-plugin-react` wired in produces false positives against
@@ -250,6 +274,31 @@ root -- npm workspaces fan them out to every package that defines them.)
   at the repo root. Get a real key from console.anthropic.com -- it starts
   with `sk-ant-api03-` and is over 100 characters; a short `apikey_...`-
   style token is from a different system and will get a 401 here.
+
+#### Adding the product's own AI traces (Token Profiler)
+
+When the product's AI calls are already recorded in a local Token Profiler
+(its OpenTelemetry, file or Hermes connectors), `analyze` can add them as
+evidence:
+
+```
+token-profiler open
+node packages/cli/dist/index.cjs analyze 1 --db ./gauntlet.db --token-profiler http://localhost:4317 --tp-connector opentelemetry --tp-since 2026-09-01 --tp-until 2026-09-30
+```
+
+- `--tp-connector` is required (repeatable) and names where the product's
+  traces are stored; the dashboard's filters list the connectors.
+- `--tp-since` / `--tp-until` take an ISO date (whole UTC day) or a full
+  timestamp; a session is included when it *started* in the window.
+  Defaults: the 30 days ending now.
+- Packet `1` stays as it was. The run prints the new packet id and its
+  `A*` items, then runs the Scientist and Reviewer on the new packet and
+  saves the report against it. To re-analyze, run `analyze <newId>`
+  without `--token-profiler`; enriching an already-enriched packet is
+  refused.
+- Every Token Profiler problem (not running, wrong URL, no sessions in the
+  window, a coding-agent connector) stops the run before any Claude call,
+  with the reason.
 
 On Windows, if `npm install` reports install scripts blocked for
 `better-sqlite3` or `esbuild`, approve them and rebuild:

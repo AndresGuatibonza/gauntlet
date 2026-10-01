@@ -4,7 +4,7 @@
  * Profiler's local-first, migration-tracked pattern.
  *
  * Migration SQL is kept inline (mirrored in
- * packages/cli/src/store/migrations/001_init.sql for human review) rather than read from
+ * packages/cli/src/store/migrations/*.sql for human review) rather than read from
  * disk at runtime, so the compiled/bundled CLI never depends on a migrations
  * folder shipping alongside dist/.
  */
@@ -81,6 +81,19 @@ CREATE TABLE IF NOT EXISTS review_records (
 CREATE INDEX IF NOT EXISTS idx_review_records_report ON review_records(report_id);
 `,
   },
+  {
+    // Evidence contract Amendment 1: `analyze --token-profiler` saves the
+    // trace-enriched packet as a NEW row instead of mutating the public-scan
+    // packet. This column links the copy back to the packet it came from;
+    // NULL for every packet produced by `scan`. Only §1.3 items are mirrored
+    // into evidence_items -- §1.6 AI items live in packet_json.
+    name: "003_packet_lineage",
+    sql: `
+ALTER TABLE evidence_packets ADD COLUMN derived_from_packet_id INTEGER REFERENCES evidence_packets(id);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_packets_derived_from ON evidence_packets(derived_from_packet_id);
+`,
+  },
 ];
 
 export interface SavedOpportunityReport {
@@ -92,7 +105,9 @@ export interface SavedOpportunityReport {
 }
 
 export interface GauntletStore {
-  saveEvidencePacket(packet: EvidencePacket): number;
+  saveEvidencePacket(packet: EvidencePacket, options?: { derivedFromPacketId?: number }): number;
+  /** The packet this one was derived from (Amendment 1 enrichment), or undefined for a public-scan packet. */
+  getPacketLineage(id: number): number | undefined;
   getEvidencePacketById(id: number): EvidencePacket | undefined;
   listEvidencePackets(): Array<{ id: number; url: string; productName: string; scannedAt: string }>;
   saveOpportunityReport(packetId: number, report: OpportunityReport, reviewRecords: ReviewRecord[]): number;
@@ -127,14 +142,15 @@ export function openStore(path: string): GauntletStore {
   runMigrations(db);
 
   const insertPacket = db.prepare(
-    `INSERT INTO evidence_packets (url, product_name, category, scanned_at, packet_json)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO evidence_packets (url, product_name, category, scanned_at, packet_json, derived_from_packet_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   );
   const insertItem = db.prepare(
     `INSERT INTO evidence_items (id, packet_id, source_url, evidence_type, observation, raw_excerpt, confidence)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   const selectPacketById = db.prepare("SELECT packet_json FROM evidence_packets WHERE id = ?");
+  const selectLineage = db.prepare("SELECT derived_from_packet_id AS derivedFrom FROM evidence_packets WHERE id = ?");
   const selectAllPackets = db.prepare(
     "SELECT id, url, product_name AS productName, scanned_at AS scannedAt FROM evidence_packets ORDER BY id DESC",
   );
@@ -161,7 +177,7 @@ export function openStore(path: string): GauntletStore {
   );
 
   return {
-    saveEvidencePacket(packet: EvidencePacket): number {
+    saveEvidencePacket(packet: EvidencePacket, options?: { derivedFromPacketId?: number }): number {
       const result = db.transaction(() => {
         const insertResult = insertPacket.run(
           packet.productIdentity.url,
@@ -169,6 +185,7 @@ export function openStore(path: string): GauntletStore {
           packet.productIdentity.category,
           packet.confidenceMetadata.freshness,
           JSON.stringify(packet),
+          options?.derivedFromPacketId ?? null,
         );
         const packetId = Number(insertResult.lastInsertRowid);
         for (const item of packet.observedEvidence) {
@@ -191,6 +208,11 @@ export function openStore(path: string): GauntletStore {
       const row = selectPacketById.get(id) as { packet_json: string } | undefined;
       if (!row) return undefined;
       return JSON.parse(row.packet_json) as EvidencePacket;
+    },
+
+    getPacketLineage(id: number): number | undefined {
+      const row = selectLineage.get(id) as { derivedFrom: number | null } | undefined;
+      return row?.derivedFrom ?? undefined;
     },
 
     listEvidencePackets() {

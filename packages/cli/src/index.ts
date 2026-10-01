@@ -23,8 +23,21 @@ import {
   type ReviewRecord,
   type OpportunityCard,
   type OpportunityReport,
+  TokenProfilerError,
+  isPopulatedAiEvidence,
 } from "@gauntlet/core";
 import { openStore } from "./store/sqlite.js";
+import {
+  DEFAULT_TP_WINDOW_DAYS,
+  enrichPacketWithTokenProfiler,
+  printAiEvidenceSummary,
+  resolveTokenProfilerQuery,
+  type TokenProfilerCliOptions,
+} from "./token-profiler-option.js";
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
 // Node 20.6+ built-in .env loader. Optional -- ANTHROPIC_API_KEY may also
 // already be set in the shell. Never throws if the file is absent; a
@@ -156,21 +169,75 @@ program
   .argument("<packetId>", "Evidence Packet id, as printed by `gauntlet scan`")
   .option("--db <path>", "SQLite database path", "./gauntlet.db")
   .option("--out <path>", "Also write the Opportunity Report as JSON to this path")
-  .action(async (packetIdArg: string, opts: { db: string; out?: string }) => {
-    const packetId = Number.parseInt(packetIdArg, 10);
-    if (!Number.isFinite(packetId) || packetId < 1) {
+  .option(
+    "--token-profiler <url>",
+    "Add the product's own AI traces from a local Token Profiler (e.g. http://localhost:4317); saves an enriched copy of the packet",
+  )
+  .option("--tp-connector <name>", "Token Profiler connector holding the product's traces (repeatable; required with --token-profiler)", collect, [])
+  .option("--tp-since <date>", `Include sessions that started at/after this ISO date or timestamp (default: ${DEFAULT_TP_WINDOW_DAYS} days before --tp-until)`)
+  .option("--tp-until <date>", "Include sessions that started at/before this ISO date (whole day) or timestamp (default: now)")
+  .action(async (packetIdArg: string, opts: { db: string; out?: string } & TokenProfilerCliOptions) => {
+    const requestedPacketId = Number.parseInt(packetIdArg, 10);
+    if (!Number.isFinite(requestedPacketId) || requestedPacketId < 1) {
       console.error("Error: <packetId> must be a positive integer.");
       process.exitCode = 1;
       return;
     }
 
+    // Validate the Token Profiler flags before touching the store.
+    let tpQuery;
+    try {
+      tpQuery = resolveTokenProfilerQuery(opts);
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+
     const store = openStore(opts.db);
-    const packet = store.getEvidencePacketById(packetId);
-    if (!packet) {
-      console.error(`Error: no Evidence Packet with id ${packetId} in ${opts.db}. Run \`gauntlet scan\` first.`);
+    const sourcePacket = store.getEvidencePacketById(requestedPacketId);
+    if (!sourcePacket) {
+      console.error(`Error: no Evidence Packet with id ${requestedPacketId} in ${opts.db}. Run \`gauntlet scan\` first.`);
       store.close();
       process.exitCode = 1;
       return;
+    }
+
+    // Fail fast on a missing API key before Token Profiler is read, so a
+    // misconfigured run never leaves an enriched packet behind.
+    let llmClient;
+    try {
+      llmClient = createAnthropicLlmClient();
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      store.close();
+      process.exitCode = 1;
+      return;
+    }
+
+    // Amendment 1: analyze a NEW trace-enriched copy; the public-scan packet
+    // stays as it was. Any Token Profiler failure stops here, before Claude.
+    let packetId = requestedPacketId;
+    let packet = sourcePacket;
+    if (tpQuery) {
+      console.log(
+        `Reading Token Profiler at ${tpQuery.baseUrl} (connector(s): ${tpQuery.connectors.join(", ")}; sessions started ${tpQuery.since} to ${tpQuery.until})...`,
+      );
+      try {
+        const enrichment = await enrichPacketWithTokenProfiler(store, requestedPacketId, sourcePacket, tpQuery);
+        printAiEvidenceSummary(enrichment, requestedPacketId);
+        packetId = enrichment.packetId;
+        packet = enrichment.packet;
+      } catch (err) {
+        console.error(
+          err instanceof TokenProfilerError
+            ? `Token Profiler error: ${err.message}`
+            : `Token Profiler error (unexpected): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        store.close();
+        process.exitCode = 1;
+        return;
+      }
     }
 
     // Same guard as the web pipeline (apps/web/lib/run-scan.ts): with zero
@@ -183,17 +250,8 @@ program
       return;
     }
 
-    let llmClient;
-    try {
-      llmClient = createAnthropicLlmClient();
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      store.close();
-      process.exitCode = 1;
-      return;
-    }
-
-    console.log(`Running Product Scientist on Evidence Packet #${packetId} (${packet.productIdentity.productName})...`);
+    const aiNote = isPopulatedAiEvidence(packet.aiEvidence) ? ", public scan + AI traces" : "";
+    console.log(`Running Product Scientist on Evidence Packet #${packetId} (${packet.productIdentity.productName}${aiNote})...`);
     let scientistReport;
     try {
       scientistReport = await generateOpportunityReport(packet, llmClient);

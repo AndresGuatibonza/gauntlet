@@ -13,13 +13,14 @@
  * Card contract before it is trusted for anything downstream.
  *
  * Hard rule enforced here, on top of what Zod checks: `evidenceRefs` must
- * point at real ids from the Evidence Packet's `observedEvidence`. Per the
+ * point at real ids from the Evidence Packet's `observedEvidence` (E*) or,
+ * when present, its `aiEvidence.items` (A*, contract Amendment 1). Per the
  * contract's own non-goal ("no orphan claims"), a card citing an id that
  * does not exist in the packet is a contract violation, not a stylistic
  * nit -- it means the model asserted evidence it was not given. That is
  * treated as a failed generation, not silently downgraded.
  */
-import type { EvidencePacket } from "./evidence-packet.js";
+import { citableEvidenceIds, type EvidencePacket } from "./evidence-packet.js";
 import { OpportunityReportSchema, computeRankScore, type OpportunityCard, type OpportunityReport } from "./opportunity-card.js";
 import { type LlmClient, type LlmMessage, LlmCallError } from "./llm-client.js";
 
@@ -36,12 +37,13 @@ export class ScientistError extends Error {
 const SYSTEM_PROMPT = `You are the Product Scientist component of Gauntlet, a tool that turns a public-website scan (an "Evidence Packet") into ranked, testable product-improvement opportunities.
 
 Ground rules, non-negotiable:
-1. Every factual claim in every card must trace back to one or more evidence item ids from the packet's observedEvidence list (field "evidenceRefs"). Never cite an id that is not in the packet. Never invent evidence.
+1. Every factual claim in every card must trace back to one or more evidence item ids (field "evidenceRefs"): ids from the packet's observedEvidence list (E1, E2, ...) and, when the packet's aiEvidence is populated, ids from aiEvidence.items (A1, A2, ...). Never cite an id that is not in the packet. Never invent evidence.
 2. Never infer hidden backend behavior, real user behavior, or AI model behavior from frontend appearance alone. If evidence is missing for a claim, do not make the claim -- reflect the gap in "missingEvidence" instead.
 3. Be product-outcome oriented (conversion, activation, retention, trust), not merely defect-oriented (do not just list typos or minor UI nits).
 4. Every hypothesis must be falsifiable -- a specific, testable statement, not a vague wish like "improve onboarding."
 5. Do not fabricate false precision. Impact and effort are directional judgments with a one-sentence rationale, not fake statistics.
-6. Output exactly 3 to 5 Opportunity Cards, ranked best-first, with EXACTLY ONE card marked "nextAction": "build_this" (the single best next experiment). The rest get "connect_data_to_validate" or "do_not_prioritize_yet".
+6. When aiEvidence is populated, it is real token-usage data from the product's own AI traces, limited to aiEvidence.source (connectors, date window, session and invocation counts). Never treat it as complete beyond that coverage, and never read a check listed in aiEvidence.notEvaluable as "no problem found". Cards that rest mainly on aiEvidence items normally have changeSurface "prompt", "model" or "reliability". Never claim anything about prompt or response content: none is included.
+7. Output exactly 3 to 5 Opportunity Cards, ranked best-first, with EXACTLY ONE card marked "nextAction": "build_this" (the single best next experiment). The rest get "connect_data_to_validate" or "do_not_prioritize_yet".
 
 Output format:
 Respond with ONLY a single JSON object, no markdown code fences, no prose before or after. The object has this exact shape:
@@ -86,7 +88,7 @@ function extractJsonPayload(raw: string): string {
 }
 
 function validEvidenceIds(packet: EvidencePacket): Set<string> {
-  return new Set(packet.observedEvidence.map((item) => item.id));
+  return new Set(citableEvidenceIds(packet));
 }
 
 function checkNoOrphanRefs(report: OpportunityReport, packet: EvidencePacket): string[] {

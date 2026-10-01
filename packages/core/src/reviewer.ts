@@ -21,7 +21,7 @@
  * dropped before the product sees the report -- never silently shipped as-is."
  */
 import { z } from "zod";
-import type { EvidencePacket } from "./evidence-packet.js";
+import { isPopulatedAiEvidence, type EvidencePacket } from "./evidence-packet.js";
 import { CardConfidenceSchema, computeRankScore, type OpportunityCard, type OpportunityReport } from "./opportunity-card.js";
 import { type LlmClient, type LlmMessage, LlmCallError } from "./llm-client.js";
 
@@ -71,7 +71,7 @@ export interface ReviewedOpportunityReport {
 const SYSTEM_PROMPT = `You are the Peer Reviewer / Experiment Critic for Gauntlet. You are given an Evidence Packet and a set of Opportunity Cards a separate Scientist component already generated from it. Your job is to critique each card against this checklist -- you do not generate new opportunities, and you never add evidence the packet does not contain.
 
 For EVERY card, answer all four checklist questions and give a verdict:
-1. outrunsEvidence: does the card's problemStatement/hypothesis claim more than what evidenceRefs actually supports?
+1. outrunsEvidence: does the card's problemStatement/hypothesis claim more than what evidenceRefs actually supports? This includes treating partial trace coverage (aiEvidence.source's window and connectors, or a check listed in aiEvidence.notEvaluable) as if it were complete.
 2. hasUnaddressedConfounder: is there an obvious alternative explanation for the observation that the card ignores?
 3. metricMatchesOutcome: does experiment.primaryMetric actually measure the outcome named in problemStatement? (false = mismatch)
 4. isFalsifiableAndSingleChange: is the experiment falsifiable and does it change exactly one thing? (false = not falsifiable, or bundles multiple changes)
@@ -102,7 +102,12 @@ Respond with ONLY a single JSON object, no markdown fences, no prose outside the
 One review record per card, same order as given, cardIndex matching its position.`;
 
 function buildUserPrompt(report: OpportunityReport, packet: EvidencePacket): string {
-  return `Evidence Packet (for context on what evidence actually exists):\n${JSON.stringify(packet.observedEvidence, null, 2)}\n\nOpportunity Cards to review:\n${JSON.stringify(report.cards, null, 2)}\n\nReview every card now, following the checklist exactly.`;
+  // AI evidence (contract Amendment 1) goes in whole -- source coverage and
+  // notEvaluable included -- so the checklist can judge partial coverage.
+  const aiEvidence = isPopulatedAiEvidence(packet.aiEvidence)
+    ? `\n\nAI evidence from the product's own traces (cards may cite these A* ids):\n${JSON.stringify(packet.aiEvidence, null, 2)}`
+    : "";
+  return `Evidence Packet (for context on what evidence actually exists):\n${JSON.stringify(packet.observedEvidence, null, 2)}${aiEvidence}\n\nOpportunity Cards to review:\n${JSON.stringify(report.cards, null, 2)}\n\nReview every card now, following the checklist exactly.`;
 }
 
 function extractJsonPayload(raw: string): string {

@@ -73,19 +73,73 @@ export const EvidenceItemSchema = z.object({
 export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
 
 // ---------------------------------------------------------------------------
-// §1.4-1.7 Reserved field groups -- not populated in the public-scan-only
-// Ingestion Engine (Build Order #1). Present but empty, per the contract's
-// own instruction, so the Scientist's input shape never has to change once
-// these become real (analytics / observability / repo / AI-trace adapters,
-// Build Order #4+).
+// §1.4, §1.5, §1.7 Reserved field groups -- not populated yet. Present but
+// empty, per the contract's own instruction, so the Scientist's input shape
+// never has to change once these become real (analytics / observability /
+// repo adapters, Build Order #4+).
 // ---------------------------------------------------------------------------
 export const ReservedEmptySchema = z.object({}).strict();
 export type ReservedEmpty = z.infer<typeof ReservedEmptySchema>;
 
 // ---------------------------------------------------------------------------
+// §1.6 AI evidence (contract Amendment 1). Empty ({}) in every public-scan
+// packet; populated only by the CLI from a local Token Profiler (see
+// token-profiler-adapter.ts). Items are citable like §1.3 items, with ids
+// A1, A2... that never collide with §1.3's E1, E2...
+// ---------------------------------------------------------------------------
+export const AiEvidenceTypeSchema = z.enum(["usage_profile", "failure_rate", "anomaly_flag", "context_repetition"]);
+export type AiEvidenceType = z.infer<typeof AiEvidenceTypeSchema>;
+
+export const AiEvidenceItemSchema = z
+  .object({
+    id: z.string().regex(/^A[1-9]\d*$/, 'AI evidence ids are "A1", "A2", ...'),
+    sourceRef: z.string().min(1),
+    timestamp: z.string().datetime(),
+    evidenceType: AiEvidenceTypeSchema,
+    observation: z.string().min(1),
+    rawExcerpt: z.string(),
+    // "low" is deliberately not allowed: every item is a deterministic
+    // aggregate. "medium" marks figures that rest on estimated or partial
+    // token provenance.
+    confidence: z.enum(["high", "medium"]),
+  })
+  .strict();
+export type AiEvidenceItem = z.infer<typeof AiEvidenceItemSchema>;
+
+export const AiEvidenceSourceSchema = z
+  .object({
+    system: z.literal("token_profiler"),
+    connectors: z.array(z.string()),
+    window: z.object({ from: z.string().datetime(), to: z.string().datetime() }).strict(),
+    sessionCount: z.number().int().nonnegative(),
+    invocationCount: z.number().int().nonnegative(),
+    pulledAt: z.string().datetime(),
+  })
+  .strict();
+export type AiEvidenceSource = z.infer<typeof AiEvidenceSourceSchema>;
+
+export const PopulatedAiEvidenceSchema = z
+  .object({
+    source: AiEvidenceSourceSchema,
+    items: z.array(AiEvidenceItemSchema).min(1),
+    // Checks that could not run for this data. Never to be read as "no
+    // problem found" (contract §1.6).
+    notEvaluable: z.array(z.string()),
+  })
+  .strict();
+export type PopulatedAiEvidence = z.infer<typeof PopulatedAiEvidenceSchema>;
+
+export const AiEvidenceSchema = z.union([PopulatedAiEvidenceSchema, ReservedEmptySchema]);
+export type AiEvidence = z.infer<typeof AiEvidenceSchema>;
+
+export function isPopulatedAiEvidence(value: AiEvidence): value is PopulatedAiEvidence {
+  return "items" in value;
+}
+
+// ---------------------------------------------------------------------------
 // §1.8 Confidence metadata (packet-level)
 // ---------------------------------------------------------------------------
-export const SourceReliabilitySchema = z.enum(["public_scan_only"]);
+export const SourceReliabilitySchema = z.enum(["public_scan_only", "public_scan_plus_ai_traces"]);
 
 export const ConfidenceMetadataSchema = z.object({
   sourceReliability: SourceReliabilitySchema,
@@ -103,17 +157,53 @@ export type ConfidenceMetadata = z.infer<typeof ConfidenceMetadataSchema>;
 // ---------------------------------------------------------------------------
 // Full Evidence Packet
 // ---------------------------------------------------------------------------
-export const EvidencePacketSchema = z.object({
-  productIdentity: ProductIdentitySchema,
-  surfaceMap: SurfaceMapSchema,
-  observedEvidence: z.array(EvidenceItemSchema),
-  behaviorEvidence: ReservedEmptySchema,
-  reliabilityEvidence: ReservedEmptySchema,
-  aiEvidence: ReservedEmptySchema,
-  codeContext: ReservedEmptySchema,
-  confidenceMetadata: ConfidenceMetadataSchema,
-});
+export const EvidencePacketSchema = z
+  .object({
+    productIdentity: ProductIdentitySchema,
+    surfaceMap: SurfaceMapSchema,
+    observedEvidence: z.array(EvidenceItemSchema),
+    behaviorEvidence: ReservedEmptySchema,
+    reliabilityEvidence: ReservedEmptySchema,
+    aiEvidence: AiEvidenceSchema,
+    codeContext: ReservedEmptySchema,
+    confidenceMetadata: ConfidenceMetadataSchema,
+  })
+  .superRefine((packet, ctx) => {
+    // sourceReliability must say whether trace evidence is present, so a
+    // reader (or the Scientist) can never mistake one kind of packet for
+    // the other.
+    const hasTraces = isPopulatedAiEvidence(packet.aiEvidence);
+    const declared = packet.confidenceMetadata.sourceReliability;
+    if (hasTraces !== (declared === "public_scan_plus_ai_traces")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confidenceMetadata", "sourceReliability"],
+        message: hasTraces
+          ? 'A packet with populated aiEvidence must declare sourceReliability "public_scan_plus_ai_traces".'
+          : 'sourceReliability "public_scan_plus_ai_traces" requires populated aiEvidence.',
+      });
+    }
+    // Every citable id must be unique across §1.3 and §1.6.
+    const seen = new Set<string>();
+    for (const id of citableEvidenceIds(packet)) {
+      if (seen.has(id)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["aiEvidence"], message: `Duplicate evidence id "${id}".` });
+      }
+      seen.add(id);
+    }
+  });
 export type EvidencePacket = z.infer<typeof EvidencePacketSchema>;
+
+/**
+ * Every id an Opportunity Card may cite in evidenceRefs: §1.3 items (E*)
+ * plus, when present, §1.6 AI evidence items (A*). Returned as an array (in
+ * packet order) so duplicates stay detectable.
+ */
+export function citableEvidenceIds(packet: Pick<EvidencePacket, "observedEvidence" | "aiEvidence">): string[] {
+  const ids = packet.observedEvidence.map((item) => item.id);
+  if (isPopulatedAiEvidence(packet.aiEvidence)) ids.push(...packet.aiEvidence.items.map((item) => item.id));
+  return ids;
+}
 
 // ---------------------------------------------------------------------------
 // Pre-Scientist guard: is there anything to analyze at all?
@@ -135,7 +225,7 @@ export type EvidencePacket = z.infer<typeof EvidencePacketSchema>;
 const MAX_UNREACHABLE_LISTED = 3;
 
 export function hasInsufficientEvidence(packet: EvidencePacket): boolean {
-  return packet.observedEvidence.length === 0;
+  return citableEvidenceIds(packet).length === 0;
 }
 
 /**

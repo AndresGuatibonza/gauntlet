@@ -116,3 +116,54 @@ describe("reviewOpportunityReport", () => {
     expect(result.report.cards).toHaveLength(3);
   });
 });
+
+describe("reviewOpportunityReport with AI evidence (contract Amendment 1)", () => {
+  it("shows the reviewer the AI evidence and its coverage limits, and the partial-coverage rule", async () => {
+    const { attachAiEvidence } = await import("../src/token-profiler-adapter.js");
+    const packet = attachAiEvidence(fakeEvidencePacket(), {
+      source: {
+        system: "token_profiler",
+        connectors: ["otel"],
+        window: { from: "2026-09-01T00:00:00.000Z", to: "2026-09-30T23:59:59.999Z" },
+        sessionCount: 3,
+        invocationCount: 40,
+        pulledAt: "2026-10-01T12:00:00.000Z",
+      },
+      items: [
+        {
+          id: "A1",
+          sourceRef: "token-profiler:window",
+          timestamp: "2026-10-01T12:00:00.000Z",
+          evidenceType: "failure_rate",
+          observation: "6 of 40 model invocations (15.0%) did not succeed.",
+          rawExcerpt: "{}",
+          confidence: "high",
+        },
+      ],
+      notEvaluable: ["RETRY_HEAVY: no invocation reports an attempt number."],
+    });
+    const report = threeCardReport();
+    let system = "";
+    let user = "";
+    const client = fakeLlmClient((options) => {
+      system = options.system;
+      user = options.messages.map((m) => m.content).join("\n");
+      return allPassJson(report);
+    });
+    await reviewOpportunityReport(report, packet, client);
+    expect(user).toContain("6 of 40 model invocations");
+    expect(user).toContain("RETRY_HEAVY");
+    expect(system + user).toMatch(/notEvaluable/);
+  });
+
+  it("does not add an AI evidence section for a public-scan-only packet", async () => {
+    const report = threeCardReport();
+    let user = "";
+    const client = fakeLlmClient((options) => {
+      user = options.messages.map((m) => m.content).join("\n");
+      return allPassJson(report);
+    });
+    await reviewOpportunityReport(report, fakeEvidencePacket(), client);
+    expect(user).not.toContain("token_profiler");
+  });
+});
