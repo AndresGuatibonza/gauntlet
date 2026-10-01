@@ -56,11 +56,16 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 
 | Path | Responsibility |
 |---|---|
-| `app/page.tsx` | Landing page: URL input, category (AI SaaS / AI tool), starts a scan. |
+| `app/page.tsx` | Landing page; renders the single-page scan flow. |
 | `app/api/scans/route.ts` | `POST /api/scans`: validates the URL (HTTPS only), checks the quota, creates the job, starts the pipeline in the background, returns `202 { id }`. |
 | `app/api/scans/[id]/route.ts` | `GET /api/scans/:id`: returns the job (status, Evidence Packet, report, review records, error). 404 for unknown or malformed ids. |
 | `app/api/scans/[id]/events/route.ts` | `POST /api/scans/:id/events`: records report-page events and card ratings (§4). |
-| `app/scans/[id]/page.tsx` | Report page: polls every 2.5 s, shows the status tracker, then the cards. |
+| `app/scans/[id]/page.tsx` | Shared/refreshed report link; renders the same flow, which reads the scan id from the address. |
+| `components/scan-experience.tsx` | The whole flow in place: URL form → compact bar + stage tracker + activity line → report. Address moves to `/scans/<id>` via `history.pushState` (no reload); Back returns to the form. |
+| `components/scan-report.tsx` | The finished report and its funnel/feedback events. |
+| `components/activity-line.tsx` | The live "what it's doing now" line under the tracker. |
+| `lib/scan-client.ts` | Polling hook, job response type, stage phrases and the activity-line selection rule. |
+| `lib/progress.ts` | Serialized, best-effort progress writer used by the pipeline. |
 | `app/signup/page.tsx` | Placeholder that carries `?from=<job>` and `?card=<index>` for when real signup exists. |
 | `lib/run-scan.ts` | The pipeline for one job, run inside Next.js `after()` (the function keeps running after the HTTP response). |
 | `lib/store.ts`, `lib/db.ts` | Postgres access through Supabase's transaction pooler; TLS with Supabase's own CA embedded (`lib/supabase-ca.ts`). |
@@ -90,21 +95,36 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
    and responds `202` with the job id.
 3. **Pipeline (background, `lib/run-scan.ts`).** Status moves through:
    - `scanning`: fetch and discover pages, extract evidence, build and
-     validate the Evidence Packet.
+     validate the Evidence Packet. Each page fetch reports a progress
+     line ("Reading /pricing (3 of 8)").
    - **Zero-evidence guard**: if no evidence was collected (for example,
      the site answers the scanner with HTTP 403), the job fails right here
      with the real reason and no Claude call is made.
-   - `analyzing`: Scientist call.
-   - `reviewing`: Reviewer call.
+   - `analyzing`: Scientist call (progress: "Analyzing N pieces of
+     evidence from M pages").
+   - `reviewing`: Reviewer call (progress: "Reviewing N candidate
+     opportunities").
+   - Progress is written to `scan_jobs.progress` as `{status, message}`,
+     serialized and best-effort: a failed progress write is logged and
+     never fails the scan.
    - `done`: report and review records stored, `scan_completed` recorded
      (best effort; a failed event write never fails a finished scan).
    - Any error at any stage sets `failed` with a specific message and
      records `scan_failed` (one `failJob` helper for every failure path); a
      job is never left stuck in an intermediate status.
-4. **Report page.** Polls `GET /api/scans/:id` every 2.5 s. The tracker
-   advances at most one stage every 700 ms so fast stages are still shown
-   in order. On `done` it renders the cards, the "Best next experiment"
-   first, and records `report_viewed`.
+4. **One page, three states.** Submitting the form morphs the URL field
+   into a compact bar with the scanned site, and the address becomes
+   `/scans/<id>` without a reload. The page polls `GET /api/scans/:id`
+   every 2.5 s. The stage tracker advances at most one stage every 700 ms
+   so fast stages are still shown in order. Under it, an activity line
+   shows the pipeline's own progress message, but only while the job is in
+   that stage and that stage is the one displayed; during the two Claude
+   calls it alternates with short stage phrases ("Running through design
+   choices", "Checking every claim against the evidence"). On `done` the
+   progress view gives way to the report in place, "Best next experiment"
+   first, and `report_viewed` is recorded. On `failed` the form returns
+   with the reason and the URL pre-filled ("Try again"). "Scan another"
+   returns to the empty form.
 5. **Interaction.** Each card has a "Build this" button (records
    `build_this_requested` and goes to the signup placeholder with the card)
    and a rating: obvious / useful / surprising / wrong / would act now
@@ -187,6 +207,11 @@ more events from PRD §11: `scan_failed` (server), `deepen_analysis_clicked`
 PRD's `build_this_clicked` is `build_this_requested` here. Existing rows
 satisfy the new constraints.
 
+**`005_scan_progress.sql`**: adds nullable `scan_jobs.progress` (jsonb,
+`{status, message}`), the activity line's source. Writes to it are
+best-effort, so code deployed before this migration still scans, only
+without the activity line.
+
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
 intent, `wrong` ratings as a proxy for false confidence).
@@ -246,8 +271,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 160 tests:
-CLI 21, core 83, web 59). `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 180 tests:
+CLI 21, core 85, web 72). `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -260,6 +285,12 @@ expected to be clean.
   existing database. Verified end to end against a real Token Profiler
   build loaded with 114 synthetic product invocations, up to the Claude
   call.
+- Single-page flow: the progress writer's ordering and failure handling,
+  the activity-line rule (a message never appears under the wrong stage)
+  and its rotation; the full flow verified in Chromium against a
+  production build with a mocked API: morph, address change, each stage's
+  line, report in place, refresh, Back/Forward, "Scan another", a failed
+  scan, mobile width and reduced motion, in both themes.
 - `apps/web`: component tests with jsdom and Testing Library (status
   tracker, cards and their actions, theme switch) and unit tests for the
   quota and event validation.
@@ -297,8 +328,8 @@ expected to be clean.
 2. **No Postgres in CI**: the SQL guarantees above are not re-checked
    automatically. First CI improvement: a Postgres service container
    running those scenarios.
-3. **No migration runner**: four hand-applied migrations; add a runner
-   with a `schema_migrations` table before a fifth.
+3. **No migration runner**: five hand-applied migrations; add a runner
+   with a `schema_migrations` table before the next one.
 4. **No data-retention policy** (PRD §18): `scan_jobs` and `scan_events`
    are kept indefinitely.
 5. **IP-based quota**: shared IPs share a quota and IPv6 rotation can

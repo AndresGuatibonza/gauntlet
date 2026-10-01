@@ -552,3 +552,163 @@ button.theme-toggle:hover:not(:disabled) {
     transition: none;
   }
 }
+
+/* Single-page scan flow (components/scan-experience.tsx) */
+.intro-title {
+  font-size: clamp(40px, 8vw, 64px);
+  margin-top: 10px;
+}
+
+.failed-title {
+  font-size: clamp(26px, 5vw, 34px);
+  line-height: 1.2;
+}
+
+.failed-reason {
+  margin: 14px 0 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--danger);
+  color: var(--ink-dim);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.scan-form {
+  margin-top: 36px;
+}
+
+/* The URL field and its button share one surface; this element morphs into .scan-bar. */
+.scan-field,
+.scan-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.scan-field {
+  padding: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.scan-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow);
+}
+
+.scan-field input[type="url"] {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 12px;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.scan-field input[type="url"]:focus {
+  border: none;
+  box-shadow: none;
+}
+
+.scan-field button {
+  flex-shrink: 0;
+}
+
+.scan-options {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  border: none;
+  margin: 18px 0 0;
+  padding: 0 4px;
+  font-size: 14px;
+}
+
+.scan-options label {
+  cursor: pointer;
+}
+
+.scan-bar {
+  justify-content: space-between;
+  padding: 10px 10px 10px 18px;
+  min-height: 56px;
+}
+
+.scan-bar-target {
+  margin: 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scan-bar-host {
+  font-family: var(--serif);
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.scan-bar-rest {
+  font-size: 14px;
+  color: var(--ink-faint);
+  margin-left: 2px;
+}
+
+button.compact {
+  padding: 8px 14px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.scan-progress {
+  margin-top: 36px;
+}
+
+.activity-line {
+  min-height: 1.6em;
+  margin: -8px 0 18px;
+  font-size: 15px;
+  color: var(--accent);
+}
+
+.report-title {
+  font-size: clamp(26px, 5vw, 32px);
+  margin-top: 40px;
+}
+
+.report-summary {
+  margin: 10px 0 0;
+  color: var(--ink-dim);
+  font-size: 15px;
+  max-width: 580px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 560px) {
+  .scan-field {
+    flex-wrap: wrap;
+  }
+  .scan-field button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-field {
+    transition: none;
+  }
+}

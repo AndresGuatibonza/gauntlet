@@ -195,6 +195,16 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
     pre-opened Evidence isn't counted until someone opens it). PRD's
     `build_this_clicked` is recorded as `build_this_requested`. Signup,
     GitHub, source and experiment events wait for those features.
+  - **One page, in place** (`components/scan-experience.tsx`): the URL
+    form morphs into a compact bar, the stage tracker and a live activity
+    line show the scan's progress, and the report replaces them -- no
+    page change. The address moves to `/scans/<id>` with
+    `history.pushState`, so the report is shareable and survives a
+    refresh; `/scans/[id]` renders the same flow. The activity line shows
+    the pipeline's real steps ("Reading /pricing (3 of 8)", "Analyzing 54
+    pieces of evidence from 8 pages"), stored in `scan_jobs.progress`
+    (migration `005_scan_progress.sql`), alternating with short stage
+    phrases during the two Claude calls.
 
 ## Known limitations (v0, by design)
 
@@ -432,10 +442,10 @@ Setup steps, for a fresh environment:
    one-liner to generate one).
 4. Run the migrations in `apps/web/lib/migrations/` **in order**
    (`001_init.sql`, `002_scan_rate_limit.sql`, `003_scan_events.sql`,
-   `004_more_scan_events.sql`) once each via
-   Supabase's SQL Editor (or `psql` against the direct connection). Both
+   `004_more_scan_events.sql`, `005_scan_progress.sql`) once each via
+   Supabase's SQL Editor (or `psql` against the direct connection). All
    are idempotent. There's no automated migration runner for the web app
-   yet; with four hand-applied migrations, add one before a fifth.
+   yet; with five hand-applied migrations, add one before the next.
 5. `cd apps/web && npm run dev`, open `http://localhost:3000`, paste a
    real public URL.
 

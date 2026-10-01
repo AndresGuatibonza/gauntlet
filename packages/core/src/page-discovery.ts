@@ -37,6 +37,28 @@ export interface DiscoveryResult {
   notReachable: UnreachablePage[];
 }
 
+/**
+ * Emitted right before each page is fetched, so a caller can show what
+ * the scan is doing (the web app's activity line). `index` is 1-based and
+ * `total` counts the homepage; `total` is only known once the homepage has
+ * been read, so it is undefined for the homepage event.
+ */
+export type DiscoveryProgress =
+  | { kind: "homepage"; url: string }
+  | { kind: "page"; url: string; index: number; total: number };
+
+export type DiscoveryProgressListener = (progress: DiscoveryProgress) => void;
+
+/** A listener is display-only: if it throws, discovery carries on. */
+function notify(listener: DiscoveryProgressListener | undefined, progress: DiscoveryProgress): void {
+  if (!listener) return;
+  try {
+    listener(progress);
+  } catch {
+    // Progress reporting must never change what gets scanned.
+  }
+}
+
 function isRelevant(url: string, linkText: string): boolean {
   const haystack = `${url} ${linkText}`.toLowerCase();
   return RELEVANT_KEYWORDS.some((kw) => haystack.includes(kw));
@@ -72,10 +94,12 @@ export async function discoverAndFetchPages(
   homepageUrl: string,
   fetcher: PageFetcher,
   maxPages: number = DEFAULT_MAX_PAGES,
+  onProgress?: DiscoveryProgressListener,
 ): Promise<DiscoveryResult> {
   const fetched: FetchResult[] = [];
   const notReachable: UnreachablePage[] = [];
 
+  notify(onProgress, { kind: "homepage", url: homepageUrl });
   const homepageResult = await fetcher.fetch(homepageUrl);
   fetched.push(homepageResult);
   if (!homepageResult.ok) {
@@ -90,7 +114,9 @@ export async function discoverAndFetchPages(
   const remainingBudget = Math.max(0, maxPages - 1);
   const toVisit = candidates.slice(0, remainingBudget);
 
-  for (const candidate of toVisit) {
+  const total = 1 + toVisit.length;
+  for (const [i, candidate] of toVisit.entries()) {
+    notify(onProgress, { kind: "page", url: candidate.url, index: i + 2, total });
     const result = await fetcher.fetch(candidate.url);
     fetched.push(result);
     if (!result.ok) {

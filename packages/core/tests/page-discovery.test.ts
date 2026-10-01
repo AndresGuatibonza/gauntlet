@@ -73,3 +73,34 @@ describe("discoverAndFetchPages", () => {
     expect(result.notReachable).toEqual([{ url: "https://example.com/pricing", reason: "HTTP 500" }]);
   });
 });
+
+describe("discoverAndFetchPages progress", () => {
+  const pages: Record<string, FetchResult> = {
+    "https://example.com/": { url: "https://example.com/", ok: true, html: HOMEPAGE_HTML, status: 200 },
+    "https://example.com/pricing": { url: "https://example.com/pricing", ok: true, html: "<html></html>", status: 200 },
+    "https://example.com/docs": { url: "https://example.com/docs", ok: true, html: "<html></html>", status: 200 },
+    "https://example.com/about": { url: "https://example.com/about", ok: true, html: "<html></html>", status: 200 },
+  };
+
+  it("reports each page right before it is fetched, in order, with a 1-based index and the planned total", async () => {
+    const events: unknown[] = [];
+    await discoverAndFetchPages("https://example.com/", fakeFetcher(pages), 3, (p) => events.push(p));
+    expect(events).toEqual([
+      { kind: "homepage", url: "https://example.com/" },
+      { kind: "page", url: "https://example.com/pricing", index: 2, total: 3 },
+      { kind: "page", url: "https://example.com/docs", index: 3, total: 3 },
+    ]);
+  });
+
+  it("keeps scanning when the listener throws", async () => {
+    const result = await discoverAndFetchPages("https://example.com/", fakeFetcher(pages), 8, () => {
+      throw new Error("display failed");
+    });
+    expect(result.fetched.map((f) => f.url)).toEqual([
+      "https://example.com/",
+      "https://example.com/pricing",
+      "https://example.com/docs",
+      "https://example.com/about",
+    ]);
+  });
+});

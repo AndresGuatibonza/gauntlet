@@ -33,17 +33,28 @@ import {
   reviewOpportunityReport,
   ReviewerError,
 } from "@gauntlet/core";
-import { recordScanEvent, updateScanJob } from "./store.js";
+import { recordScanEvent, setScanProgress, updateScanJob } from "./store.js";
+import { createProgressReporter, describePage, plural } from "./progress.js";
 
 export async function runScanJob(jobId: string, url: string, category: "ai_tool" | "ai_saas"): Promise<void> {
+  // Real steps, in plain words, for the activity line under the tracker.
+  const progress = createProgressReporter((p) => setScanProgress(jobId, p));
   try {
     await updateScanJob(jobId, { status: "scanning" });
+    progress.report("scanning", "Checking your application");
 
     const robots = new RobotsChecker(nodeHttpClient);
     const rateLimiter = new RateLimiter();
     const fetcher = new PageFetcher(nodeHttpClient, robots, rateLimiter);
 
-    const { fetched, notReachable } = await discoverAndFetchPages(url, fetcher, DEFAULT_MAX_PAGES);
+    const { fetched, notReachable } = await discoverAndFetchPages(url, fetcher, DEFAULT_MAX_PAGES, (step) => {
+      progress.report(
+        "scanning",
+        step.kind === "homepage"
+          ? "Reading the homepage"
+          : `Reading ${describePage(step.url)} (${step.index} of ${step.total})`,
+      );
+    });
     const pages: PageScanResult[] = fetched.map((f) => ({
       fetch: f,
       extraction: f.ok && f.html ? extractPage(f.html, f.url) : null,
@@ -75,7 +86,13 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
       return;
     }
 
+    await progress.flush();
     await updateScanJob(jobId, { status: "analyzing", evidencePacket: parsedPacket.data });
+    const pagesRead = parsedPacket.data.surfaceMap.pagesInspected.length;
+    progress.report(
+      "analyzing",
+      `Analyzing ${plural(parsedPacket.data.observedEvidence.length, "piece", "pieces")} of evidence from ${plural(pagesRead, "page", "pages")}`,
+    );
 
     let llmClient;
     try {
@@ -93,7 +110,12 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
       return;
     }
 
+    await progress.flush();
     await updateScanJob(jobId, { status: "reviewing" });
+    progress.report(
+      "reviewing",
+      `Reviewing ${plural(scientistReport.cards.length, "candidate opportunity", "candidate opportunities")}`,
+    );
 
     try {
       const reviewed = await reviewOpportunityReport(scientistReport, parsedPacket.data, llmClient);

@@ -8,6 +8,7 @@ import type { EvidencePacket, OpportunityReport, ReviewRecord } from "@gauntlet/
 import { getPool } from "./db.js";
 import { evaluateScanQuota, QUOTA_WINDOW_SECONDS, type QuotaDenial, type ScanLimits } from "./rate-limit.js";
 import type { CardRating, ScanEventType } from "./events.js";
+import type { ScanProgress } from "./progress.js";
 
 export type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -20,6 +21,8 @@ export interface ScanJob {
   opportunityReport: OpportunityReport | null;
   reviewRecords: ReviewRecord[] | null;
   errorMessage: string | null;
+  /** Latest progress line (migration 005); null before it exists or when none was written. */
+  progress: ScanProgress | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -33,6 +36,8 @@ interface ScanJobRow {
   opportunity_report: OpportunityReport | null;
   review_records: ReviewRecord[] | null;
   error_message: string | null;
+  // Absent (undefined) until migration 005 is applied.
+  progress?: ScanProgress | null;
   created_at: string;
   updated_at: string;
 }
@@ -47,6 +52,7 @@ function rowToJob(row: ScanJobRow): ScanJob {
     opportunityReport: row.opportunity_report,
     reviewRecords: row.review_records,
     errorMessage: row.error_message,
+    progress: row.progress ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -205,6 +211,16 @@ export async function updateScanJob(
   setClauses.push(`updated_at = now()`);
   values.push(id);
   await getPool().query(`update scan_jobs set ${setClauses.join(", ")} where id = $${i}`, values);
+}
+
+/**
+ * Writes the progress line only -- deliberately separate from
+ * updateScanJob, so a missing `progress` column (migration 005 not yet
+ * applied) can only fail this best-effort write, never a status change.
+ * Does not bump updated_at: progress is display data, not a job change.
+ */
+export async function setScanProgress(id: string, progress: ScanProgress): Promise<void> {
+  await getPool().query(`update scan_jobs set progress = $1 where id = $2`, [JSON.stringify(progress), id]);
 }
 
 export interface ScanEventInput {

@@ -1,0 +1,15 @@
+-- Gauntlet web app -- live progress line for a running scan.
+--
+-- The report page shows, under the stage tracker, a few words on what the
+-- scan is doing right now ("Reading /pricing (3 of 8)", "Analyzing 54
+-- pieces of evidence from 8 pages"). run-scan.ts writes it as
+-- {"status": "<stage>", "message": "<text>"}; the page shows the message
+-- only while the job is still in that stage, so a message can never be
+-- displayed under the wrong stage.
+--
+-- Nullable, no default: existing rows and finished jobs simply have none.
+-- Progress writes are best-effort in the code (a failed write is logged and
+-- the scan carries on), so a deploy that reaches production before this
+-- migration still scans correctly, only without the activity line. Apply it
+-- anyway BEFORE deploying, per the usual order. Idempotent.
+alter table scan_jobs add column if not exists progress jsonb;
