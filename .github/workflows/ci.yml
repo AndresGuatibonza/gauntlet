@@ -4,6 +4,8 @@
 #               migrations (run twice, so idempotency is checked on every
 #               change) and the integration tests in apps/web/tests-db.
 # No secrets are needed: nothing here calls Claude or Supabase.
+# The runner image is pinned (ubuntu-24.04), not ubuntu-latest, so a runner
+# upgrade can't change the build without a commit; v5 actions run on Node 24.
 name: CI
 
 on:
@@ -16,11 +18,11 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -34,7 +36,7 @@ jobs:
         run: npm run build --workspace=web
 
   database:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
@@ -54,8 +56,8 @@ jobs:
       MIGRATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
