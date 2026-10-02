@@ -1,0 +1,68 @@
+# Runs on every push and pull request. Two jobs:
+#   checks   -- typecheck, lint, unit/component tests, CLI and web builds;
+#   database -- the web app's SQL guarantees against a real Postgres 16:
+#               migrations (run twice, so idempotency is checked on every
+#               change) and the integration tests in apps/web/tests-db.
+# No secrets are needed: nothing here calls Claude or Supabase.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Build CLI
+        run: npm run build
+      - name: Build web app
+        run: npm run build --workspace=web
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Local service container only: lib/db.ts refuses DATABASE_SSL=disable for any non-local host.
+      DATABASE_SSL: disable
+      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply migrations
+        run: npm run migrate --workspace=web
+      - name: Re-apply migrations (must be a no-op)
+        run: npm run migrate --workspace=web | tee migrate.log && grep -q "Database is up to date." migrate.log
+      - name: Database integration tests
+        run: npm run test:db --workspace=web
