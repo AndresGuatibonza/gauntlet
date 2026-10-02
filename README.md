@@ -99,6 +99,18 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
   always holds after review.
 - **CLI** (`packages/cli`) -- `gauntlet scan <url>` (Build Order #1),
   `gauntlet analyze <packetId>` (Build Order #2), local-first SQLite.
+- **"Build this" + Experiment Ledger** (`packages/core/src/action-package.ts`,
+  contract §2.2–§2.3) -- turns one card into an engineering-ready
+  implementation package (objective, non-goals, approach, feature flag,
+  acceptance criteria, measurement, rollback, risks, missing context) plus
+  a copyable prompt for the team's coding agent and a Markdown brief. The
+  card's hypothesis, experiment and evidence are copied in verbatim; the
+  model only writes the engineering parts, can only cite the card's
+  evidence, and may not name files (no repository is connected yet). Each
+  package starts an Experiment Ledger record (`planned`). Web: the "Build
+  this" button writes the brief inside the card (one per card, separate
+  daily quota). CLI: `gauntlet build` and `gauntlet ledger`, where results
+  and decisions are recorded.
 - **Token Profiler adapter** (`packages/core/src/token-profiler-adapter.ts`,
   evidence contract Amendment 1) -- `gauntlet analyze <packetId>
   --token-profiler <url>` reads the scanned product's own AI traces from a
@@ -285,6 +297,24 @@ root -- npm workspaces fan them out to every package that defines them.)
   with `sk-ant-api03-` and is over 100 characters; a short `apikey_...`-
   style token is from a different system and will get a 401 here.
 
+#### "Build this" briefs and the Experiment Ledger (CLI)
+
+```
+node packages/cli/dist/index.cjs build 1 --db ./gauntlet.db --out ./scans/brief.md
+node packages/cli/dist/index.cjs ledger --db ./gauntlet.db
+node packages/cli/dist/index.cjs ledger record 1 --running --db ./gauntlet.db
+node packages/cli/dist/index.cjs ledger record 1 --decision ship --result "Signups +8% over two weeks" --db ./gauntlet.db
+node packages/cli/dist/index.cjs ledger record 1 --outcome "Rolled out to all visitors" --db ./gauntlet.db
+```
+
+- `build <reportId>` writes the brief for the report's Best next
+  experiment (or `--card <n>`, numbered as `analyze` prints them) and
+  starts a `planned` ledger record. A card that already has a brief shows
+  it instead of generating a new one. Needs `ANTHROPIC_API_KEY`.
+- `ledger record`: `--running`, then `--decision ship|iterate|discard`
+  with `--result` (required), and later `--outcome` once. A decided record
+  can't be changed; start a new experiment instead.
+
 #### Adding the product's own AI traces (Token Profiler)
 
 When the product's AI calls are already recorded in a local Token Profiler
@@ -462,7 +492,10 @@ section before assuming a fresh Supabase/API key setup is wrong.
 Deploying to Vercel: import the repo, set the **Root Directory** to
 `apps/web`, add the same three env vars (`DATABASE_URL`,
 `ANTHROPIC_API_KEY`, `SCAN_IP_HASH_SECRET`) plus `CRON_SECRET` (any
-random string of 16+ characters) in Vercel's project settings. **Run
+random string of 16+ characters) in Vercel's project settings. Optional:
+`PACKAGE_LIMIT_PER_CLIENT_PER_DAY` (default 5) and
+`PACKAGE_LIMIT_GLOBAL_PER_DAY` (default 40) bound "Build this" briefs,
+one Claude call each. **Run
 `npm run migrate --workspace=web` against Supabase before deploying code
 that needs a new migration.**
 

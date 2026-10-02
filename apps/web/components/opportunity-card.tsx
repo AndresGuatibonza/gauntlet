@@ -62,6 +62,10 @@ export interface CardActions {
   feedbackError: string | null;
   onRate: (rating: CardRating) => void;
   onBuildThis: () => void;
+  /** True while the implementation brief is being written: the button can't start a second one. */
+  buildBusy?: boolean;
+  /** Rendered under the actions: the "Build this" implementation brief, once requested. */
+  packageSlot?: React.ReactNode;
   /** The visitor opened a collapsed section (not fired for one already open). */
   onSectionOpened: (section: CardSection) => void;
 }
@@ -178,7 +182,12 @@ export function OpportunityCardView({
 function CardActionsRow({ actions, isHero }: { actions: CardActions; isHero?: boolean }): React.JSX.Element {
   return (
     <div className="card-actions">
-      <button type="button" className={isHero ? undefined : "secondary"} onClick={actions.onBuildThis}>
+      <button
+        type="button"
+        className={isHero ? undefined : "secondary"}
+        onClick={actions.onBuildThis}
+        disabled={actions.buildBusy}
+      >
         Build this &#8594;
       </button>
       <div className="feedback" role="group" aria-label="Rate this opportunity">
@@ -200,6 +209,7 @@ function CardActionsRow({ actions, isHero }: { actions: CardActions; isHero?: bo
           {actions.feedbackError}
         </p>
       )}
+      {actions.packageSlot}
     </div>
   );
 }

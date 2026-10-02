@@ -25,7 +25,10 @@ import {
   type OpportunityReport,
   TokenProfilerError,
   isPopulatedAiEvidence,
+  ActionPackageError,
+  renderActionPackageMarkdown,
 } from "@gauntlet/core";
+import { buildPackage, formatLedger, LedgerError, recordExperiment } from "./ledger.js";
 import { openStore } from "./store/sqlite.js";
 import {
   DEFAULT_TP_WINDOW_DAYS,
@@ -323,5 +326,86 @@ function printAnalysisSummary(
     console.log(`Full report + review records written to ${outPath}`);
   }
 }
+
+program
+  .command("build")
+  .description('"Build this": turn a report card into an implementation brief and start its Experiment Ledger record')
+  .argument("<reportId>", "Opportunity Report id, as printed by `gauntlet analyze`")
+  .option("--card <n>", "Card number as printed by `analyze` (default: the Best next experiment)")
+  .option("--db <path>", "SQLite database path", "./gauntlet.db")
+  .option("--out <path>", "Write the brief as Markdown to this path")
+  .action(async (reportIdArg: string, opts: { card?: string; db: string; out?: string }) => {
+    const reportId = Number.parseInt(reportIdArg, 10);
+    if (!Number.isInteger(reportId) || reportId < 1) {
+      console.error("Error: <reportId> must be a positive integer.");
+      process.exitCode = 1;
+      return;
+    }
+    const store = openStore(opts.db);
+    try {
+      const { saved, created } = await buildPackage(store, reportId, opts.card, () => createAnthropicLlmClient());
+      const markdown = renderActionPackageMarkdown(saved.package);
+      if (opts.out) writeFileSync(opts.out, markdown, "utf-8");
+      else console.log(markdown);
+      console.log(
+        created
+          ? `Implementation brief saved; Experiment #${saved.experimentId} is planned in the ledger (flag ${saved.package.featureFlag.name}).`
+          : `This card already has a brief (Experiment #${saved.experimentId}); showing it instead of generating a new one.`,
+      );
+      if (opts.out) console.log(`Brief written to ${opts.out}`);
+    } catch (err) {
+      console.error(
+        err instanceof LedgerError || err instanceof ActionPackageError || err instanceof LlmCallError
+          ? `Error: ${err.message}`
+          : `Error (unexpected): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+const ledger = program
+  .command("ledger")
+  .description("Show the Experiment Ledger: every experiment started with `gauntlet build`, its result and decision")
+  .option("--db <path>", "SQLite database path", "./gauntlet.db")
+  .action((opts: { db: string }) => {
+    const store = openStore(opts.db);
+    try {
+      console.log(formatLedger(store.listExperiments()));
+    } finally {
+      store.close();
+    }
+  });
+
+ledger
+  .command("record")
+  .description("Record progress on an experiment: --running, or --decision with --result, and later --outcome")
+  .argument("<experimentId>", "Experiment id, as listed by `gauntlet ledger`")
+  .option("--running", "The experiment is live")
+  .option("--decision <decision>", "ship, iterate or discard")
+  .option("--result <text>", "What the experiment showed (required with --decision)")
+  .option("--outcome <text>", "What happened after the decision (can be added once, later)")
+  .option("--db <path>", "SQLite database path", "./gauntlet.db")
+  .action(
+    (idArg: string, opts: { running?: boolean; decision?: string; result?: string; outcome?: string; db: string }) => {
+      const id = Number.parseInt(idArg, 10);
+      if (!Number.isInteger(id) || id < 1) {
+        console.error("Error: <experimentId> must be a positive integer.");
+        process.exitCode = 1;
+        return;
+      }
+      const store = openStore(opts.db);
+      try {
+        const updated = recordExperiment(store, id, opts);
+        console.log(formatLedger([updated]));
+      } catch (err) {
+        console.error(err instanceof LedgerError ? `Error: ${err.message}` : `Error (unexpected): ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      } finally {
+        store.close();
+      }
+    },
+  );
 
 program.parseAsync(process.argv);

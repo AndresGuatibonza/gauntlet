@@ -18,12 +18,18 @@ describe("contract vocabulary", () => {
       "opportunity_feedback_submitted",
       "build_this_requested",
       "deepen_analysis_clicked",
+      "action_package_generated",
+      "experiment_created",
     ]);
     expect(CARD_RATINGS).toEqual(["obvious", "useful", "surprising", "wrong", "would_act_now"]);
   });
 });
 
 describe("ClientEventSchema", () => {
+  it.each(["action_package_generated", "experiment_created"])("never accepts the server-only event %s from a browser", (type) => {
+    expect(ClientEventSchema.safeParse({ type, cardIndex: 0 }).success).toBe(false);
+  });
+
   it("accepts the browser events", () => {
     expect(ClientEventSchema.safeParse({ type: "report_viewed" }).success).toBe(true);
     expect(ClientEventSchema.safeParse({ type: "deepen_analysis_clicked" }).success).toBe(true);

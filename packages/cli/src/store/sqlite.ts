@@ -9,7 +9,7 @@
  * folder shipping alongside dist/.
  */
 import Database from "better-sqlite3";
-import type { EvidencePacket, OpportunityCard, OpportunityReport, ReviewRecord } from "@gauntlet/core";
+import type { ActionPackage, EvidencePacket, ExperimentRecord, OpportunityCard, OpportunityReport, ReviewRecord } from "@gauntlet/core";
 
 const MIGRATIONS: Array<{ name: string; sql: string }> = [
   {
@@ -94,6 +94,33 @@ ALTER TABLE evidence_packets ADD COLUMN derived_from_packet_id INTEGER REFERENCE
 CREATE INDEX IF NOT EXISTS idx_evidence_packets_derived_from ON evidence_packets(derived_from_packet_id);
 `,
   },
+  {
+    // "Build this" implementation packages and the Experiment Ledger
+    // (evidence contract §2.2-§2.3). One package per (report, card); each
+    // starts one ledger record, "planned" until a result and decision are
+    // recorded with `gauntlet ledger record`. A decided record is final.
+    name: "004_action_packages_and_ledger",
+    sql: `
+CREATE TABLE IF NOT EXISTS action_packages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_id       INTEGER NOT NULL REFERENCES opportunity_reports(id),
+  card_index      INTEGER NOT NULL CHECK (card_index >= 0),
+  package_json    TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  UNIQUE (report_id, card_index)
+);
+
+CREATE TABLE IF NOT EXISTS experiment_records (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_package_id   INTEGER NOT NULL UNIQUE REFERENCES action_packages(id),
+  status              TEXT NOT NULL CHECK (status IN ('planned', 'running', 'decided')),
+  record_json         TEXT NOT NULL,
+  decided_at          TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+`,
+  },
 ];
 
 export interface SavedOpportunityReport {
@@ -112,7 +139,33 @@ export interface GauntletStore {
   listEvidencePackets(): Array<{ id: number; url: string; productName: string; scannedAt: string }>;
   saveOpportunityReport(packetId: number, report: OpportunityReport, reviewRecords: ReviewRecord[]): number;
   getOpportunityReportById(id: number): SavedOpportunityReport | undefined;
+  getActionPackage(reportId: number, cardIndex: number): SavedActionPackage | undefined;
+  /** Saves a package and its planned ledger record in one transaction. */
+  saveActionPackage(reportId: number, cardIndex: number, pkg: ActionPackage, record: ExperimentRecord): SavedActionPackage;
+  getExperiment(id: number): SavedExperiment | undefined;
+  listExperiments(): SavedExperiment[];
+  updateExperiment(id: number, record: ExperimentRecord): void;
   close(): void;
+}
+
+export interface SavedActionPackage {
+  id: number;
+  reportId: number;
+  cardIndex: number;
+  package: ActionPackage;
+  experimentId: number;
+}
+
+export interface SavedExperiment {
+  id: number;
+  actionPackageId: number;
+  reportId: number;
+  cardIndex: number;
+  productName: string;
+  record: ExperimentRecord;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 function runMigrations(db: Database.Database): void {
@@ -175,6 +228,39 @@ export function openStore(path: string): GauntletStore {
   const selectReviewRecordsByReport = db.prepare(
     "SELECT record_json FROM review_records WHERE report_id = ? ORDER BY card_index ASC",
   );
+
+  function listExperimentRows(where: string, params: unknown[]): SavedExperiment[] {
+    const rows = db
+      .prepare(
+        `SELECT e.id, e.action_package_id AS actionPackageId, p.report_id AS reportId, p.card_index AS cardIndex,
+                e.record_json AS recordJson, p.package_json AS packageJson,
+                e.decided_at AS decidedAt, e.created_at AS createdAt, e.updated_at AS updatedAt
+           FROM experiment_records e JOIN action_packages p ON p.id = e.action_package_id
+           ${where} ORDER BY e.id DESC`,
+      )
+      .all(...params) as Array<{
+      id: number;
+      actionPackageId: number;
+      reportId: number;
+      cardIndex: number;
+      recordJson: string;
+      packageJson: string;
+      decidedAt: string | null;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      actionPackageId: r.actionPackageId,
+      reportId: r.reportId,
+      cardIndex: r.cardIndex,
+      productName: (JSON.parse(r.packageJson) as ActionPackage).product.name,
+      record: JSON.parse(r.recordJson) as ExperimentRecord,
+      decidedAt: r.decidedAt,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  }
 
   return {
     saveEvidencePacket(packet: EvidencePacket, options?: { derivedFromPacketId?: number }): number {
@@ -246,6 +332,56 @@ export function openStore(path: string): GauntletStore {
         report: { cards: cardRows.map((r) => JSON.parse(r.card_json) as OpportunityCard) },
         reviewRecords: reviewRows.map((r) => JSON.parse(r.record_json) as ReviewRecord),
       };
+    },
+
+    getActionPackage(reportId: number, cardIndex: number): SavedActionPackage | undefined {
+      const row = db
+        .prepare(
+          `SELECT p.id, p.report_id AS reportId, p.card_index AS cardIndex, p.package_json AS packageJson, e.id AS experimentId
+             FROM action_packages p JOIN experiment_records e ON e.action_package_id = p.id
+            WHERE p.report_id = ? AND p.card_index = ?`,
+        )
+        .get(reportId, cardIndex) as
+        | { id: number; reportId: number; cardIndex: number; packageJson: string; experimentId: number }
+        | undefined;
+      if (!row) return undefined;
+      return { id: row.id, reportId: row.reportId, cardIndex: row.cardIndex, package: JSON.parse(row.packageJson), experimentId: row.experimentId };
+    },
+
+    saveActionPackage(reportId, cardIndex, pkg, record): SavedActionPackage {
+      return db.transaction(() => {
+        const now = new Date().toISOString();
+        const packageId = Number(
+          db
+            .prepare(`INSERT INTO action_packages (report_id, card_index, package_json, created_at) VALUES (?, ?, ?, ?)`)
+            .run(reportId, cardIndex, JSON.stringify(pkg), now).lastInsertRowid,
+        );
+        const experimentId = Number(
+          db
+            .prepare(
+              `INSERT INTO experiment_records (action_package_id, status, record_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(packageId, record.status, JSON.stringify(record), now, now).lastInsertRowid,
+        );
+        return { id: packageId, reportId, cardIndex, package: pkg, experimentId };
+      })();
+    },
+
+    getExperiment(id: number): SavedExperiment | undefined {
+      return listExperimentRows(`WHERE e.id = ?`, [id])[0];
+    },
+
+    listExperiments(): SavedExperiment[] {
+      return listExperimentRows("", []);
+    },
+
+    updateExperiment(id: number, record: ExperimentRecord): void {
+      const now = new Date().toISOString();
+      db.prepare(
+        `UPDATE experiment_records SET status = ?, record_json = ?, updated_at = ?,
+                decided_at = CASE WHEN ? = 'decided' THEN ? ELSE decided_at END
+          WHERE id = ?`,
+      ).run(record.status, JSON.stringify(record), now, record.status, now, id);
     },
 
     close(): void {

@@ -28,6 +28,10 @@ export const SCAN_EVENT_TYPES = [
   "opportunity_feedback_submitted",
   "build_this_requested",
   "deepen_analysis_clicked",
+  // Server-written, migration 006: a "Build this" package was generated and
+  // its Experiment Ledger record created (PRD §11).
+  "action_package_generated",
+  "experiment_created",
 ] as const;
 export type ScanEventType = (typeof SCAN_EVENT_TYPES)[number];
 

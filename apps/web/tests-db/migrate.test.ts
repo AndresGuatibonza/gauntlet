@@ -41,7 +41,7 @@ describe("runMigrations", () => {
     const job = await client.query(`insert into scan_jobs (url, category, status, client_ip_hash) values ('https://a.com/', 'ai_saas', 'done', 'h') returning id`);
     await client.query(`insert into scan_events (scan_job_id, event_type, client_ip_hash) values ($1, 'scan_started', 'h')`, [job.rows[0].id]);
 
-    expect(await runMigrations(client)).toHaveLength(5);
+    expect(await runMigrations(client)).toHaveLength(loadMigrations().length);
     expect((await client.query(`select count(*)::int as n from scan_jobs`)).rows[0].n).toBe(1);
     expect((await client.query(`select count(*)::int as n from scan_events`)).rows[0].n).toBe(1);
     // The widened event constraint from 004 survived re-running 003.
@@ -63,10 +63,11 @@ describe("runMigrations", () => {
   it("rolls back a failing migration completely and keeps the ones before it", async () => {
     const dir = copyMigrations();
     try {
-      writeFileSync(join(dir, "006_broken.sql"), "create table half_done (id int);\nselect * from no_such_table;\n");
-      await expect(runMigrations(client, loadMigrations(dir))).rejects.toThrow(/"006_broken" failed and was rolled back/);
+      const next = String(loadMigrations().length + 1).padStart(3, "0");
+      writeFileSync(join(dir, `${next}_broken.sql`), "create table half_done (id int);\nselect * from no_such_table;\n");
+      await expect(runMigrations(client, loadMigrations(dir))).rejects.toThrow(new RegExp(`"${next}_broken" failed and was rolled back`));
       const status = await migrationStatus(client, loadMigrations(dir));
-      expect(status.pending).toEqual(["006_broken"]);
+      expect(status.pending).toEqual([`${next}_broken`]);
       expect((await client.query(`select to_regclass('half_done') as t`)).rows[0].t).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -4,7 +4,7 @@
  * of SQLite -- see lib/migrations/001_init.sql for why this is one table,
  * not the CLI's normalized three.
  */
-import type { EvidencePacket, OpportunityReport, ReviewRecord } from "@gauntlet/core";
+import type { ActionPackage, EvidencePacket, ExperimentRecord, OpportunityReport, ReviewRecord } from "@gauntlet/core";
 import { getPool } from "./db.js";
 import { evaluateScanQuota, QUOTA_WINDOW_SECONDS, type QuotaDenial, type ScanLimits } from "./rate-limit.js";
 import type { CardRating, ScanEventType } from "./events.js";
@@ -73,21 +73,28 @@ function rowToJob(row: ScanJobRow): ScanJob {
  */
 const SCAN_QUOTA_LOCK_KEY = 7254001; // arbitrary, only needs to be unique within this database
 
-const QUOTA_USAGE_SQL = `
+/**
+ * Rolling-window usage of one quota-bearing table: per-client count, global
+ * count, and when a slot frees in each. The table name is a closed union,
+ * never user input.
+ */
+function quotaUsageSql(table: "scan_jobs" | "action_packages"): string {
+  return `
   with win as (select now() - make_interval(secs => $4) as since)
   select
     now() as now,
-    (select count(*)::int from scan_jobs, win
+    (select count(*)::int from ${table}, win
       where client_ip_hash = $1 and created_at > win.since) as client_count,
-    (select created_at from scan_jobs, win
+    (select created_at from ${table}, win
       where client_ip_hash = $1 and created_at > win.since
       order by created_at desc offset ($2::int - 1) limit 1) as client_slot_frees_from,
-    (select count(*)::int from scan_jobs, win
+    (select count(*)::int from ${table}, win
       where created_at > win.since) as global_count,
-    (select created_at from scan_jobs, win
+    (select created_at from ${table}, win
       where created_at > win.since
       order by created_at desc offset ($3::int - 1) limit 1) as global_slot_frees_from
 `;
+}
 
 interface QuotaUsageRow {
   now: Date;
@@ -111,7 +118,7 @@ export async function createScanJobWithinQuota(
     await client.query("begin");
     await client.query("select pg_advisory_xact_lock($1)", [SCAN_QUOTA_LOCK_KEY]);
 
-    const usage = await client.query<QuotaUsageRow>(QUOTA_USAGE_SQL, [
+    const usage = await client.query<QuotaUsageRow>(quotaUsageSql("scan_jobs"), [
       clientIpHash,
       limits.perClient,
       limits.global,
@@ -306,8 +313,9 @@ export interface RetentionPolicy {
 
 /**
  * Data retention (PRD §18 open question; policy in HANDOFF.md). One
- * transaction: clear scan_jobs.client_ip_hash once the quota no longer
- * needs it, then delete scans past the retention period. scan_events rows
+ * transaction: clear client IP hashes on scan_jobs and action_packages once
+ * their quotas no longer need them, then delete scans past the retention
+ * period (packages and ledger records cascade with them). scan_events rows
  * go with their scan (on delete cascade); their own client hash is kept
  * until then because it is part of the per-client dedupe key.
  */
@@ -320,15 +328,202 @@ export async function purgeExpiredData(policy: RetentionPolicy): Promise<{ ipHas
         where client_ip_hash is not null and created_at < now() - make_interval(hours => $1)`,
       [policy.ipHashHours],
     );
+    const clearedPackages = await client.query(
+      `update action_packages set client_ip_hash = null
+        where client_ip_hash is not null and created_at < now() - make_interval(hours => $1)`,
+      [policy.ipHashHours],
+    );
     const deleted = await client.query(`delete from scan_jobs where created_at < now() - make_interval(days => $1)`, [
       policy.retentionDays,
     ]);
     await client.query("commit");
-    return { ipHashesCleared: cleared.rowCount ?? 0, scansDeleted: deleted.rowCount ?? 0 };
+    return { ipHashesCleared: (cleared.rowCount ?? 0) + (clearedPackages.rowCount ?? 0), scansDeleted: deleted.rowCount ?? 0 };
   } catch (err) {
     await client.query("rollback").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// "Build this" implementation packages + Experiment Ledger (migration 006)
+// ---------------------------------------------------------------------------
+
+/** Generation is one Claude call (+1 corrective retry) inside a 300 s function. */
+export const STALE_PACKAGE_MINUTES = 10;
+export const MAX_PACKAGE_ATTEMPTS = 3;
+const PACKAGE_LOCK_KEY = 7254003; // distinct from the scan quota (7254001) and migrations (7254002)
+
+export type ActionPackageState =
+  | { state: "ready"; id: string; package: ActionPackage }
+  | { state: "generating"; id: string }
+  | { state: "failed"; id: string; errorMessage: string; canRetry: boolean }
+  | { state: "none" };
+
+interface ActionPackageRow {
+  id: string;
+  status: "generating" | "ready" | "failed";
+  package: ActionPackage | null;
+  error_message: string | null;
+  attempts: number;
+  stale: boolean;
+}
+
+function rowToPackageState(row: ActionPackageRow): ActionPackageState {
+  if (row.status === "ready" && row.package) return { state: "ready", id: row.id, package: row.package };
+  if (row.status === "generating" && !row.stale) return { state: "generating", id: row.id };
+  return {
+    state: "failed",
+    id: row.id,
+    errorMessage:
+      row.status === "generating"
+        ? "Writing the implementation brief took too long and was stopped."
+        : (row.error_message ?? "Writing the implementation brief failed."),
+    canRetry: row.attempts < MAX_PACKAGE_ATTEMPTS,
+  };
+}
+
+const PACKAGE_ROW_SQL = `select id, status, package, error_message, attempts,
+  (status = 'generating' and updated_at < now() - make_interval(mins => ${STALE_PACKAGE_MINUTES})) as stale
+  from action_packages where scan_job_id = $1 and card_index = $2`;
+
+export async function getActionPackage(scanJobId: string, cardIndex: number): Promise<ActionPackageState> {
+  const result = await getPool().query<ActionPackageRow>(PACKAGE_ROW_SQL, [scanJobId, cardIndex]);
+  const row = result.rows[0];
+  return row ? rowToPackageState(row) : { state: "none" };
+}
+
+export type ClaimActionPackageResult =
+  | { outcome: "start"; id: string }
+  | { outcome: "existing"; state: Exclude<ActionPackageState, { state: "none" }> }
+  | { outcome: "denied"; denial: QuotaDenial };
+
+/**
+ * Decides, atomically, whether this request should start a generation:
+ * - a ready or in-progress package is returned as is (no second Claude call);
+ * - a failed (or timed-out) one is restarted while attempts remain;
+ * - a new one must fit the package quota, then is inserted as "generating".
+ * One transaction under an advisory lock, so concurrent clicks resolve to
+ * exactly one generation and the quota can't be overrun.
+ */
+export async function claimActionPackage(
+  scanJobId: string,
+  cardIndex: number,
+  clientIpHash: string,
+  limits: ScanLimits,
+): Promise<ClaimActionPackageResult> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock($1)", [PACKAGE_LOCK_KEY]);
+
+    const existing = (await client.query<ActionPackageRow>(PACKAGE_ROW_SQL, [scanJobId, cardIndex])).rows[0];
+    if (existing) {
+      const state = rowToPackageState(existing);
+      if (state.state === "failed" && state.canRetry) {
+        await client.query(
+          `update action_packages set status = 'generating', error_message = null, attempts = attempts + 1, updated_at = now()
+            where id = $1`,
+          [existing.id],
+        );
+        await client.query("commit");
+        return { outcome: "start", id: existing.id };
+      }
+      await client.query("commit");
+      return { outcome: "existing", state: state as Exclude<ActionPackageState, { state: "none" }> };
+    }
+
+    const usage = await client.query<QuotaUsageRow>(quotaUsageSql("action_packages"), [
+      clientIpHash,
+      limits.perClient,
+      limits.global,
+      QUOTA_WINDOW_SECONDS,
+    ]);
+    const row = usage.rows[0];
+    if (!row) throw new Error("claimActionPackage: quota usage query returned no row");
+    const decision = evaluateScanQuota({
+      client: { count: row.client_count, slotFreesFromCreatedAt: row.client_slot_frees_from },
+      global: { count: row.global_count, slotFreesFromCreatedAt: row.global_slot_frees_from },
+      limits,
+      now: row.now,
+      noun: "implementation brief",
+    });
+    if (!decision.allowed) {
+      await client.query("rollback");
+      return { outcome: "denied", denial: decision };
+    }
+    const inserted = await client.query<{ id: string }>(
+      `insert into action_packages (scan_job_id, card_index, status, client_ip_hash) values ($1, $2, 'generating', $3) returning id`,
+      [scanJobId, cardIndex, clientIpHash],
+    );
+    await client.query("commit");
+    return { outcome: "start", id: inserted.rows[0]!.id };
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Stores a generated package and starts its Experiment Ledger record, with
+ * both PRD §11 events, in one transaction. Accepts a row that was marked
+ * failed for taking too long: the work finished and is valid.
+ */
+export async function completeActionPackage(
+  id: string,
+  pkg: ActionPackage,
+  record: ExperimentRecord,
+): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const updated = await client.query<{ scan_job_id: string; card_index: number }>(
+      `update action_packages set status = 'ready', package = $2, error_message = null, updated_at = now()
+        where id = $1 and status <> 'ready' returning scan_job_id, card_index`,
+      [id, JSON.stringify(pkg)],
+    );
+    const target = updated.rows[0];
+    if (!target) {
+      await client.query("rollback");
+      return; // already completed by an earlier run
+    }
+    await client.query(
+      `insert into experiment_records
+         (scan_job_id, card_index, action_package_id, status, hypothesis, evidence_snapshot, change, experiment)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (action_package_id) do nothing`,
+      [
+        target.scan_job_id,
+        target.card_index,
+        id,
+        record.status,
+        record.hypothesis,
+        JSON.stringify(record.evidenceSnapshot),
+        JSON.stringify(record.change),
+        JSON.stringify(record.experiment),
+      ],
+    );
+    await client.query(
+      `insert into scan_events (scan_job_id, event_type, card_index)
+       values ($1, 'action_package_generated', $2), ($1, 'experiment_created', $2)
+       on conflict do nothing`,
+      [target.scan_job_id, target.card_index],
+    );
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function failActionPackage(id: string, errorMessage: string): Promise<void> {
+  await getPool().query(
+    `update action_packages set status = 'failed', error_message = $2, updated_at = now() where id = $1 and status = 'generating'`,
+    [id, errorMessage],
+  );
 }

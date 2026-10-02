@@ -21,10 +21,12 @@ validation on real products:
 | #3 Pre-auth Report UI | Public web app: scan without an account, see the report | `apps/web` |
 | Additions | Scan quota, cited evidence on cards, "Build this" CTA, card ratings, funnel events, light/dark themes | `apps/web` |
 | Contract Amendment 1 | The product's own AI traces from a local Token Profiler as citable evidence (`A1, A2...`), CLI only | `packages/core`, `packages/cli` |
+| #5 "Build this" handoff (Amendment 2) | Implementation package per card: objective, approach, feature flag, acceptance criteria, measurement, rollback, risks, coding-agent prompt | `packages/core`, `apps/web`, `packages/cli` |
+| #7 Experiment Ledger, minimal (Amendment 2) | Every package starts a `planned` record; results and decisions recorded in the CLI | `packages/core`, `apps/web`, `packages/cli` |
 
-Not started (by PRD sequencing): GitHub deep scan (#4), "Build this"
-implementation packages (#5), production data adapters (#6), Experiment
-Ledger (#7), real authentication.
+Not started: GitHub deep scan (#4), production data adapters (#6), real
+authentication. Until #4, packages are written from the public site only
+and name parts of the product, not files.
 
 ## 2. Components
 
@@ -50,6 +52,7 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `opportunity-card.ts` | Zod schema for cards and reports; `computeRankScore = impact × evidenceQuality ÷ effort` (each 1–3). |
 | `llm-client.ts` | Anthropic SDK wrapper. Model `claude-sonnet-5`, `max_tokens` 16000 (the model spends part of the budget on thinking before the text block; 4096 truncated real responses). Honors `NODE_EXTRA_CA_CERTS` for TLS-intercepting networks. |
 | `scientist.ts` | First Claude call. Must return 3–5 cards, exactly one `build_this`, and cite only evidence ids that exist in the packet (E*, and A* when the packet carries AI evidence). Invalid output gets one corrective retry with the exact validation error. Cards are ranked by `rankScore`. |
+| `action-package.ts` | "Build this" (contract §2.2–§2.3). `generateActionPackage()`: one Claude call (+1 corrective retry) writes the engineering parts; the card's hypothesis, experiment and cited evidence are copied in verbatim; rejects evidence the card doesn't cite and file-path-like components. `renderCodingAgentPrompt()` / `renderActionPackageMarkdown()`: templates over the validated package. `planExperimentRecord()` and `ExperimentRecordSchema` (ledger rules). |
 | `reviewer.ts` | Second Claude call. Applies the contract's four-question checklist to each card: `pass`, `downgrade_confidence` (can only lower, and lowers the evidence-quality score with it) or `drop`. Re-ranks survivors and re-promotes the top one to `build_this` if the original was dropped. Fails if every card is dropped. One corrective retry. |
 
 **`apps/web`**
@@ -63,6 +66,9 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `app/scans/[id]/page.tsx` | Shared/refreshed report link; renders the same flow, which reads the scan id from the address. |
 | `components/scan-experience.tsx` | The whole flow in place: URL form → compact bar + stage tracker + activity line → report. Address moves to `/scans/<id>` via `history.pushState` (no reload); Back returns to the form. |
 | `components/scan-report.tsx` | The finished report and its funnel/feedback events. |
+| `app/api/scans/[id]/cards/[index]/package/route.ts` | `POST` starts (or returns) the card's implementation package; `GET` for polling. |
+| `lib/build-package.ts` | Background package generation inside `after()`; every failure ends in `failed` with a plain message. |
+| `components/action-package-panel.tsx` | The brief inside a card: progress line, then the package with "Copy prompt for your coding agent" and "Download brief (.md)". |
 | `components/activity-line.tsx` | The live "what it's doing now" line under the tracker. |
 | `lib/scan-client.ts` | Polling hook, job response type, stage phrases and the activity-line selection rule. |
 | `lib/progress.ts` | Serialized, best-effort progress writer used by the pipeline. |
@@ -81,6 +87,7 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | Path | Responsibility |
 |---|---|
 | `src/index.ts` | `scan` and `analyze` commands. |
+| `src/ledger.ts` | `gauntlet build` (package + planned ledger record, never generated twice for a card) and `gauntlet ledger` / `ledger record` (transition rules). |
 | `src/token-profiler-option.ts` | `--token-profiler` flags → a validated query (window, connectors; coding-agent connectors refused), and the enrichment step that saves the new packet. |
 | `src/store/sqlite.ts` | SQLite store with inline, tracked migrations (`001_init`, `002_opportunity_reports`, `003_packet_lineage`). |
 
@@ -174,6 +181,31 @@ limit is 300 s (`maxDuration` on the Hobby plan).
    `notEvaluable` list, and the Reviewer's first checklist question fails a
    card that treats partial trace coverage as complete.
 
+### "Build this" (implementation package + ledger record)
+
+1. "Build this" on a card records `build_this_requested` and calls `POST
+   /api/scans/:id/cards/:index/package` (finished report and existing card
+   only).
+2. `claimActionPackage` decides atomically, under an advisory lock: a ready
+   or in-progress package is returned as is; a failed (or stuck past 10
+   minutes) one is restarted while fewer than 3 attempts were made; a new
+   one must fit the package quota (5 per client, 40 in total per 24 h,
+   separate from scans) and is inserted as `generating`. Concurrent clicks
+   therefore cost one Claude call.
+3. `after()` runs `generateActionPackage`. On success, one transaction
+   stores the package, creates its `planned` `experiment_records` row and
+   records `action_package_generated` and `experiment_created`.
+4. The card polls `GET` every 3 s and then shows the brief: objective,
+   feature flag, approach, acceptance criteria, measurement, rollback,
+   non-goals, risks, likely components, what a repository connection would
+   add (with a link through signup that keeps the scan and card), "Copy
+   prompt for your coding agent" and "Download brief (.md)". A limit or
+   failure is shown in the card; failures can be retried.
+5. In the CLI, `gauntlet build <reportId> [--card n]` does the same against
+   SQLite and `gauntlet ledger record <id> --running | --decision
+   ship|iterate|discard --result "..." [--outcome "..."]` completes the
+   record. A decided record is final.
+
 ## 4. Data model (Postgres)
 
 Migrations live in `apps/web/lib/migrations/` and are applied with
@@ -217,6 +249,15 @@ satisfy the new constraints.
 `{status, message}`), the activity line's source. Writes to it are
 best-effort, so code deployed before this migration still scans, only
 without the activity line.
+
+**`006_action_packages.sql`**: `action_packages` (one per scan and card;
+`status` generating/ready/failed, `package` jsonb present exactly when
+ready, `attempts`, `client_ip_hash` for the package quota) and
+`experiment_records` (one per package; `status`, hypothesis, evidence
+snapshot, change, experiment, result, decision, outcome; a decision exists
+exactly when decided, and always with its result). Both cascade with their
+scan. Widens the event constraints for `action_package_generated` and
+`experiment_created` (card events).
 
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
@@ -266,6 +307,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 | `SCAN_IP_HASH_SECRET` | yes | Key for hashing client IPs (long random string). |
 | `SCAN_LIMIT_PER_CLIENT_PER_DAY` | no | Default 3. |
 | `SCAN_LIMIT_GLOBAL_PER_DAY` | no | Default 20. |
+| `PACKAGE_LIMIT_PER_CLIENT_PER_DAY` | no | Default 5. Implementation briefs per client per 24 h. |
+| `PACKAGE_LIMIT_GLOBAL_PER_DAY` | no | Default 40. Implementation briefs in total per 24 h. |
 | `CRON_SECRET` | yes, for maintenance | Authorizes the daily maintenance endpoint; Vercel Cron sends it automatically. At least 16 characters. Without it the endpoint refuses every call. |
 | `SCAN_RETENTION_DAYS` | no | Default 180, minimum 30. Scans older than this are deleted with their events. |
 | `MIGRATION_DATABASE_URL` | no | Database for `npm run migrate`; defaults to `DATABASE_URL`. |
@@ -277,7 +320,7 @@ intent, `wrong` ratings as a proxy for false confidence).
   before deploying code that needs a new migration.**
 - **Daily maintenance** (`apps/web/vercel.json` cron → `GET
   /api/cron/maintenance`, 07:17 UTC): fails scans stuck in flight past 10
-  minutes, clears client IP hashes older than 48 h, and deletes scans older
+  minutes, clears client IP hashes (scans and packages) older than 48 h, and deletes scans older
   than `SCAN_RETENTION_DAYS` with their events. Idempotent.
 - **Stuck scans** also end on their own: the polling endpoint fails a scan
   that is still in flight 10 minutes after it was created (the pipeline is
@@ -292,8 +335,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 190 tests:
-CLI 21, core 85, web 87), plus 16 database integration tests. `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 230 tests:
+CLI 35, core 100, web 100), plus 24 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -320,7 +363,9 @@ expected to be clean.
   data, edited-file refusal, rollback of a failing file, concurrent
   runners), the scan quota under 12 concurrent requests, event dedupe,
   rating upsert and constraints, cascade deletes, progress, stale-scan
-  expiry and the retention purge. Each file uses its own throwaway
+  expiry, the retention purge, and packages (10 concurrent clicks start one
+  generation, package quota, retry cap, stuck generations, ledger record
+  and events written exactly once, constraints, cascades). Each file uses its own throwaway
   database. Run locally with
   `TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres DATABASE_SSL=disable npm run test:db --workspace=web`.
 
@@ -340,6 +385,11 @@ expected to be clean.
 | A new packet for trace-enriched analysis | The public-scan packet stays a faithful record of the public scan; lineage links the two. |
 | Deterministic trace adapter, no LLM summarization | Every A* number is reproducible from Token Profiler's data. |
 | `notEvaluable` instead of silence | An unevaluated check must not read as "no problem found". |
+| Package fields the card already settled are copied, not regenerated | The brief can't drift from the reviewed experiment; the model only writes what the card doesn't have. |
+| No file names until a repository is connected | A brief written from the public site that names files would be invented; path-like components are rejected. |
+| Prompt and Markdown rendered by templates | They always match the validated package. Answers PRD §18: package and coding-agent prompt. |
+| One package per card, claimed before the Claude call | Concurrent clicks and reloads never pay twice; separate package quota bounds cost. |
+| Ledger decisions in the CLI until accounts exist | Recording a decision needs an identity; anonymous web visitors only create `planned` records. |
 | Migration runner with checksums instead of hand-applied SQL | A forgotten or edited migration is caught before it reaches production; concurrent runs are serialized. |
 | Retention: IP hashes 48 h, scans 180 days | The quota only needs 24 h of IP hashes; 180 days covers a validation round and its follow-up. Closes PRD §18's retention question. |
 | Stuck scans failed by the polling endpoint, not only the cron | A visitor watching a killed scan gets an answer within one poll, not the next day. |
@@ -368,8 +418,12 @@ expected to be clean.
 6. **300 s function limit** (Vercel Hobby): a run that needs both
    corrective retries could approach it; move to Pro (800 s) only if a real
    run shows it.
-7. **Signup is a placeholder**: it only carries the scan and card ids.
-8. **Token Profiler coverage**: AI evidence covers only the chosen
+7. **Signup is a placeholder**: it only carries the scan and card ids. The
+   brief's "Connect your repository" link goes through it.
+8. **Briefs are public-site only**: until GitHub deep scan (#4), packages
+   name parts of the product, not files, and can't know the stack. The web
+   ledger has no way to record results yet (needs accounts); the CLI does.
+9. **Token Profiler coverage**: AI evidence covers only the chosen
    connectors and window, and at most 500 sessions. Token Profiler has no
    date filter, so every session of a connector is listed and filtered
    locally. Product traces must arrive through a non-coding-agent
@@ -384,6 +438,6 @@ expected to be clean.
    signup-equivalent ≥20%, false confidence <10%).
 2. Resolve the PRD §18 questions the validation raises, starting with
    supported product categories (data retention is decided; see §7).
-3. If the thresholds are met: authentication, then Build Order #4 (GitHub
-   deep scan), #5 ("Build this" implementation packages), #6 (first
-   production data adapter) and #7 (Experiment Ledger).
+3. If the thresholds are met: authentication (so web visitors can record
+   ledger results and decisions), then Build Order #4 (GitHub deep scan,
+   which turns briefs repo-aware) and #6 (first production data adapter).

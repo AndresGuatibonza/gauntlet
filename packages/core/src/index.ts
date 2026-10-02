@@ -12,3 +12,4 @@ export * from "./llm-client.js";
 export * from "./scientist.js";
 export * from "./reviewer.js";
 export * from "./token-profiler-adapter.js";
+export * from "./action-package.js";

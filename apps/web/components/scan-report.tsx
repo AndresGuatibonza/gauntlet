@@ -7,7 +7,6 @@
  * Evidence Packet. Owns the report's funnel and feedback events.
  */
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import type { EvidenceItem } from "@gauntlet/core";
@@ -15,6 +14,34 @@ import { FadeUp, StaggerItem, StaggerList } from "@/components/motion";
 import { OpportunityCardView, type CardActions, type CardSection } from "@/components/opportunity-card";
 import type { CardRating, ClientEvent } from "@/lib/events";
 import type { ScanJobResponse } from "@/lib/scan-client";
+import { ActionPackagePanel, type PackageView } from "@/components/action-package-panel";
+
+const PACKAGE_POLL_MS = 3000;
+/** Generation runs inside one 300 s function; stop polling well after that. */
+const PACKAGE_POLL_LIMIT_MS = 6 * 60 * 1000;
+
+type PackageResponse =
+  | { status: "ready"; package: Extract<PackageView, { status: "ready" }>["package"]; codingAgentPrompt: string; markdown: string }
+  | { status: "generating" }
+  | { status: "failed"; error: string; canRetry: boolean }
+  | { status: "none" };
+
+/** Turns one package API response into what the card shows; null = keep polling. */
+function toPackageView(res: Response, body: (PackageResponse & { error?: string }) | null): PackageView | null {
+  if (!body) return { status: "failed", error: `Request failed (${res.status}).`, canRetry: true };
+  if (res.status === 429) return { status: "failed", error: body.error ?? "Limit reached for now.", canRetry: false };
+  if (!res.ok && res.status !== 202) return { status: "failed", error: body.error ?? `Request failed (${res.status}).`, canRetry: res.status >= 500 };
+  switch (body.status) {
+    case "ready":
+      return { status: "ready", package: body.package, codingAgentPrompt: body.codingAgentPrompt, markdown: body.markdown };
+    case "failed":
+      return { status: "failed", error: body.error, canRetry: body.canRetry };
+    case "generating":
+      return null;
+    default:
+      return { status: "failed", error: "The implementation brief could not be started.", canRetry: true };
+  }
+}
 
 /**
  * Sends one funnel/feedback event (POST /api/scans/:id/events). Never
@@ -40,7 +67,6 @@ function plural(count: number, one: string, many: string): string {
 }
 
 export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element {
-  const router = useRouter();
   // Per-card rating/error, keyed by the card's index in the report.
   const [ratings, setRatings] = useState<Record<number, CardRating>>({});
   const [feedbackErrors, setFeedbackErrors] = useState<Record<number, string>>({});
@@ -48,6 +74,14 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
   // "cardIndex:section" keys already sent; the server dedupes per client
   // anyway, this only avoids repeat requests.
   const openedSections = useRef(new Set<string>());
+  // "Build this" implementation briefs, per card index.
+  const [packages, setPackages] = useState<Record<number, PackageView>>({});
+  const pollTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timers = pollTimers.current;
+    return () => timers.forEach((t) => clearTimeout(t));
+  }, []);
 
   useEffect(() => {
     // Once per report shown; the server also dedupes per client.
@@ -68,9 +102,42 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
     });
   }
 
+  function setPackage(cardIndex: number, view: PackageView): void {
+    setPackages((p) => ({ ...p, [cardIndex]: view }));
+  }
+
+  /** Requests the brief (POST), then polls (GET) until it is ready or failed. */
+  async function requestPackage(cardIndex: number): Promise<void> {
+    const url = `/api/scans/${job.id}/cards/${cardIndex}/package`;
+    const startedAt = Date.now();
+    setPackage(cardIndex, { status: "generating" });
+
+    async function step(method: "POST" | "GET"): Promise<void> {
+      let view: PackageView | null;
+      try {
+        const res = await fetch(url, { method, cache: "no-store" });
+        const body = (await res.json().catch(() => null)) as (PackageResponse & { error?: string }) | null;
+        view = toPackageView(res, body);
+      } catch {
+        view = Date.now() - startedAt < PACKAGE_POLL_LIMIT_MS ? null : { status: "failed", error: "Lost connection while writing the brief.", canRetry: true };
+      }
+      if (view) {
+        setPackage(cardIndex, view);
+        return;
+      }
+      if (Date.now() - startedAt > PACKAGE_POLL_LIMIT_MS) {
+        setPackage(cardIndex, { status: "failed", error: "Writing the brief is taking too long. Please try again.", canRetry: true });
+        return;
+      }
+      pollTimers.current.set(cardIndex, setTimeout(() => void step("GET"), PACKAGE_POLL_MS));
+    }
+
+    await step("POST");
+  }
+
   function buildThis(cardIndex: number): void {
-    void sendScanEvent(job.id, { type: "build_this_requested", cardIndex }, true);
-    router.push(`/signup?from=${job.id}&card=${cardIndex}`);
+    void sendScanEvent(job.id, { type: "build_this_requested", cardIndex });
+    void requestPackage(cardIndex);
   }
 
   function sectionOpened(cardIndex: number, section: CardSection): void {
@@ -88,6 +155,14 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
       feedbackError: feedbackErrors[cardIndex] ?? null,
       onRate: (rating) => rateCard(cardIndex, rating),
       onBuildThis: () => buildThis(cardIndex),
+      buildBusy: packages[cardIndex]?.status === "generating",
+      packageSlot: packages[cardIndex] ? (
+        <ActionPackagePanel
+          view={packages[cardIndex]}
+          onRetry={() => void requestPackage(cardIndex)}
+          connectRepoHref={`/signup?from=${job.id}&card=${cardIndex}`}
+        />
+      ) : null,
     };
   }
 

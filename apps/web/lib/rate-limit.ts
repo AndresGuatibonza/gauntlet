@@ -66,6 +66,19 @@ export function readScanLimits(env: Env = process.env): ScanLimits {
   };
 }
 
+/**
+ * "Build this" implementation packages: one Claude call each, so they get
+ * their own, separate daily allowance (PACKAGE_LIMIT_*).
+ */
+export const DEFAULT_PACKAGE_LIMITS = { perClient: 5, global: 40 } as const;
+
+export function readPackageLimits(env: Env = process.env): ScanLimits {
+  return {
+    perClient: parseLimit(env, "PACKAGE_LIMIT_PER_CLIENT_PER_DAY", DEFAULT_PACKAGE_LIMITS.perClient),
+    global: parseLimit(env, "PACKAGE_LIMIT_GLOBAL_PER_DAY", DEFAULT_PACKAGE_LIMITS.global),
+  };
+}
+
 /** Minimum secret length; anything shorter is almost certainly a placeholder. */
 const MIN_SECRET_LENGTH = 16;
 
@@ -142,8 +155,11 @@ export function evaluateScanQuota(input: {
   global: QuotaUsage;
   limits: ScanLimits;
   now: Date;
+  /** What is being limited, for the messages. Default "scan". */
+  noun?: string;
 }): QuotaDecision {
   const { client, global, limits, now } = input;
+  const noun = input.noun ?? "scan";
 
   if (global.count >= limits.global) {
     const retryAfterSeconds = secondsUntilSlotFrees(global, now);
@@ -152,7 +168,7 @@ export function evaluateScanQuota(input: {
       scope: "global",
       retryAfterSeconds,
       message:
-        `Gauntlet has reached its daily scan capacity (${limits.global} scans per 24 hours) while in early access. ` +
+        `Gauntlet has reached its daily ${noun} capacity (${limits.global} ${noun}s per 24 hours) while in early access. ` +
         `Please try again in ${describeWait(retryAfterSeconds)}.`,
     };
   }
@@ -164,7 +180,7 @@ export function evaluateScanQuota(input: {
       scope: "client",
       retryAfterSeconds,
       message:
-        `You've reached the scan limit for now (${limits.perClient} scans per 24 hours) while Gauntlet is in early access. ` +
+        `You've reached the ${noun} limit for now (${limits.perClient} ${noun}s per 24 hours) while Gauntlet is in early access. ` +
         `Please try again in ${describeWait(retryAfterSeconds)}.`,
     };
   }

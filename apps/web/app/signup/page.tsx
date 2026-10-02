@@ -4,10 +4,11 @@
  * originating scan id in the URL so that when real signup lands, wiring
  * "carry this report over into the new account" (PRD §8.5) has a job id
  * to attach, instead of that state having been silently dropped here.
- * "Build this" also passes the chosen card (`card`, its index in the
- * report), so the selected opportunity survives the hop as well (PRD §17:
- * "Clicking 'Build this' preserves the selected opportunity through
- * signup") -- the click itself is already logged as build_this_requested.
+ * The "Connect your repository" link under a card's implementation brief
+ * also passes the card (`card`, its index in the report), so the selected
+ * opportunity survives the hop (PRD §17: "preserves the selected
+ * opportunity through signup"); repo connection is what will turn that
+ * brief repo-aware (Build Order #4).
  */
 import Link from "next/link";
 import { FadeUp } from "@/components/motion";
@@ -29,7 +30,8 @@ export default async function SignupPlaceholderPage({
       </p>
       {cardNumber !== null && (
         <p className="muted" style={{ fontSize: 14, marginTop: 12 }}>
-          You picked opportunity #{cardNumber} to build. We&apos;ve noted your interest.
+          You asked to connect your repository for opportunity #{cardNumber}, so its implementation brief can point at
+          real files. We&apos;ve noted your interest.
         </p>
       )}
       {from && (
