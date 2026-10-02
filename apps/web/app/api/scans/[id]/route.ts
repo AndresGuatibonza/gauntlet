@@ -7,7 +7,7 @@
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getScanJob } from "@/lib/store";
+import { expireStaleJobs, getScanJob } from "@/lib/store";
 
 const JobIdSchema = z.string().uuid();
 
@@ -16,6 +16,10 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   if (!JobIdSchema.safeParse(id).success) {
     return NextResponse.json({ error: "No scan job with that id." }, { status: 404 });
   }
+  // A scan killed mid-run by the platform would otherwise poll forever:
+  // end it here, the first time anyone looks after it timed out. Best
+  // effort -- the read below still answers if this write fails.
+  await expireStaleJobs(id).catch((err) => console.error("[scans/:id] could not expire stale job:", err));
   let job;
   try {
     job = await getScanJob(id);

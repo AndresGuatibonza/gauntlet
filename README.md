@@ -440,12 +440,15 @@ Setup steps, for a fresh environment:
    `DATABASE_URL` (the pooler string above), `ANTHROPIC_API_KEY`, and
    `SCAN_IP_HASH_SECRET` (any long random string -- the file shows a
    one-liner to generate one).
-4. Run the migrations in `apps/web/lib/migrations/` **in order**
-   (`001_init.sql`, `002_scan_rate_limit.sql`, `003_scan_events.sql`,
-   `004_more_scan_events.sql`, `005_scan_progress.sql`) once each via
-   Supabase's SQL Editor (or `psql` against the direct connection). All
-   are idempotent. There's no automated migration runner for the web app
-   yet; with five hand-applied migrations, add one before the next.
+4. Apply the migrations: `npm run migrate --workspace=web` (reads
+   `apps/web/.env.local`; set `MIGRATION_DATABASE_URL` to target another
+   database). It applies every pending file in `apps/web/lib/migrations/`
+   in order, each in its own transaction, records it in
+   `schema_migrations` with a checksum, and refuses to run if an applied
+   file was edited afterwards. `npm run migrate --workspace=web -- --status`
+   lists applied and pending migrations. A database migrated by hand
+   before the runner existed needs nothing special: every migration is
+   idempotent, so the first run re-applies them harmlessly and records them.
 5. `cd apps/web && npm run dev`, open `http://localhost:3000`, paste a
    real public URL.
 
@@ -458,10 +461,26 @@ section before assuming a fresh Supabase/API key setup is wrong.
 
 Deploying to Vercel: import the repo, set the **Root Directory** to
 `apps/web`, add the same three env vars (`DATABASE_URL`,
-`ANTHROPIC_API_KEY`, `SCAN_IP_HASH_SECRET`) in Vercel's project
-settings. **Apply any new migration before deploying the code that
-needs it** -- e.g. the quota code inserts into
-`scan_jobs.client_ip_hash`, which only exists after `002`.
+`ANTHROPIC_API_KEY`, `SCAN_IP_HASH_SECRET`) plus `CRON_SECRET` (any
+random string of 16+ characters) in Vercel's project settings. **Run
+`npm run migrate --workspace=web` against Supabase before deploying code
+that needs a new migration.**
+
+`apps/web/vercel.json` schedules `GET /api/cron/maintenance` daily at
+07:17 UTC. It fails scans stuck in flight for more than 10 minutes, clears
+client IP hashes older than 48 h, and deletes scans (with their events)
+older than `SCAN_RETENTION_DAYS` (default 180, minimum 30). Vercel sends
+`CRON_SECRET` as a bearer token; without it the endpoint refuses every
+call. To run it by hand:
+`curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/cron/maintenance`.
+
+**CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
+typecheck, lint, tests and builds, plus a job with a Postgres 16 service
+that applies the migrations twice and runs the database integration
+tests (`apps/web/tests-db`). To run those locally against a disposable
+Postgres:
+`TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres DATABASE_SSL=disable npm run test:db --workspace=web`
+(`DATABASE_SSL=disable` is refused for any host other than localhost).
 Currently sized for the **Hobby** plan (`maxDuration = 300` in
 `apps/web/app/api/scans/route.ts`); if a real run shows the pipeline
 routinely needs more than 300s (most likely: both the Scientist and the
@@ -526,6 +545,5 @@ select
    CSS processing of attacker-controlled CSS; our CSS is our own). All
    fixes need major upgrades (Vitest 5, Next 16) -- do them as a
    planned upgrade, never `npm audit fix --force`.
-4. Other PRD §18 open questions still unanswered, notably the
-   data-retention policy for anonymous scans (`scan_jobs` rows are
-   currently kept indefinitely).
+4. Other PRD §18 open questions still unanswered. Data retention is
+   decided: IP hashes 48 h, scans 180 days (see "Deploying to Vercel").

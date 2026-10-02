@@ -2,13 +2,15 @@
   "name": "web",
   "version": "0.1.0",
   "private": true,
-  "description": "Gauntlet Pre-auth Report UI (Build Order #3, PRD \u00a78.5) -- paste a public URL, no account required, get ranked Opportunity Cards. Async job pattern: POST /api/scans creates a job and returns immediately; the pipeline runs via Next.js after() so it keeps going past the response (PRD \u00a79's \"Scan API / Job Manager... return status\").",
+  "description": "Gauntlet Pre-auth Report UI (Build Order #3, PRD §8.5) -- paste a public URL, no account required, get ranked Opportunity Cards. Async job pattern: POST /api/scans creates a job and returns immediately; the pipeline runs via Next.js after() so it keeps going past the response (PRD §9's \"Scan API / Job Manager... return status\").",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate": "tsx scripts/migrate.ts",
+    "test:db": "vitest run --config vitest.db.config.mts"
   },
   "dependencies": {
     "@gauntlet/core": "*",
@@ -28,6 +30,7 @@
     "vitest": "^2.0.5",
     "jsdom": "^25.0.1",
     "@testing-library/react": "^16.1.0",
-    "@testing-library/dom": "^10.4.0"
+    "@testing-library/dom": "^10.4.0",
+    "tsx": "^4.19.0"
   }
 }

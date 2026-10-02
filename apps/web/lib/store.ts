@@ -258,3 +258,77 @@ export async function recordScanEvent(event: ScanEventInput): Promise<void> {
     ],
   );
 }
+
+/**
+ * A job still "in flight" this long after it was created can't finish:
+ * the pipeline runs inside one function invocation, capped at
+ * maxDuration (300 s, app/api/scans/route.ts). If the platform killed it
+ * mid-scan, nothing would ever write a final status and the report page
+ * would poll forever. 10 minutes leaves a wide margin over 300 s.
+ */
+export const STALE_JOB_MINUTES = 10;
+
+export const STALE_JOB_MESSAGE =
+  "The scan stopped before it could finish (it ran past the time limit). Nothing was charged to you -- please try again.";
+
+/**
+ * Marks timed-out in-flight jobs as failed and records scan_failed for
+ * them, in one statement. With `jobId`, only that job (used by the polling
+ * endpoint, so a stuck scan ends the next time anyone looks at it); without,
+ * every stale job (the daily maintenance run). Returns the ids it failed.
+ */
+export async function expireStaleJobs(jobId?: string): Promise<string[]> {
+  const result = await getPool().query<{ id: string }>(
+    `with expired as (
+       update scan_jobs
+          set status = 'failed', error_message = $1, updated_at = now()
+        where status in ('queued', 'scanning', 'analyzing', 'reviewing')
+          and created_at < now() - make_interval(mins => $2)
+          and ($3::uuid is null or id = $3::uuid)
+        returning id
+     ), events as (
+       insert into scan_events (scan_job_id, event_type)
+       select id, 'scan_failed' from expired
+       on conflict do nothing
+     )
+     select id from expired`,
+    [STALE_JOB_MESSAGE, STALE_JOB_MINUTES, jobId ?? null],
+  );
+  return result.rows.map((r) => r.id);
+}
+
+export interface RetentionPolicy {
+  /** Whole scans (and, by cascade, their events) older than this are deleted. */
+  retentionDays: number;
+  /** The quota only looks back 24 h; client IP hashes are cleared after this. */
+  ipHashHours: number;
+}
+
+/**
+ * Data retention (PRD §18 open question; policy in HANDOFF.md). One
+ * transaction: clear scan_jobs.client_ip_hash once the quota no longer
+ * needs it, then delete scans past the retention period. scan_events rows
+ * go with their scan (on delete cascade); their own client hash is kept
+ * until then because it is part of the per-client dedupe key.
+ */
+export async function purgeExpiredData(policy: RetentionPolicy): Promise<{ ipHashesCleared: number; scansDeleted: number }> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const cleared = await client.query(
+      `update scan_jobs set client_ip_hash = null
+        where client_ip_hash is not null and created_at < now() - make_interval(hours => $1)`,
+      [policy.ipHashHours],
+    );
+    const deleted = await client.query(`delete from scan_jobs where created_at < now() - make_interval(days => $1)`, [
+      policy.retentionDays,
+    ]);
+    await client.query("commit");
+    return { ipHashesCleared: cleared.rowCount ?? 0, scansDeleted: deleted.rowCount ?? 0 };
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}

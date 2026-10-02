@@ -40,7 +40,7 @@ let pool: Pool | undefined;
  * it fail later with an opaque "self-signed certificate in certificate
  * chain" from deep inside `pg`.
  */
-function buildSslConfig(): { rejectUnauthorized: boolean; ca: (string | Buffer)[] } {
+export function buildSslConfig(): { rejectUnauthorized: boolean; ca: (string | Buffer)[] } {
   const ca: (string | Buffer)[] = [...rootCertificates, SUPABASE_CA_PEM];
 
   const extraCaCertsPath = process.env["NODE_EXTRA_CA_CERTS"];
@@ -58,6 +58,29 @@ function buildSslConfig(): { rejectUnauthorized: boolean; ca: (string | Buffer)[
   return { rejectUnauthorized: true, ca };
 }
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * TLS settings for a connection string. Always verified TLS, except one
+ * explicit escape hatch for a disposable local database (CI's Postgres
+ * service container, a developer's local Postgres): DATABASE_SSL=disable
+ * is honored ONLY when the host is localhost. Pointed at any other host it
+ * is an error, so it can never silently turn TLS off against Supabase.
+ */
+export function sslFor(connectionString: string): ReturnType<typeof buildSslConfig> | false {
+  if (process.env["DATABASE_SSL"] !== "disable") return buildSslConfig();
+  let host: string;
+  try {
+    host = new URL(connectionString).hostname;
+  } catch {
+    throw new Error("DATABASE_SSL=disable needs a URL-form connection string (postgresql://user@localhost:5432/db).");
+  }
+  if (!LOCAL_HOSTS.has(host)) {
+    throw new Error(`DATABASE_SSL=disable is only allowed for a local database; refusing to connect to "${host}" without TLS.`);
+  }
+  return false;
+}
+
 export function getPool(): Pool {
   if (pool) return pool;
 
@@ -71,7 +94,7 @@ export function getPool(): Pool {
   pool = new Pool({
     connectionString,
     max: 3,
-    ssl: buildSslConfig(),
+    ssl: sslFor(connectionString),
   });
   attachDatabasePool(pool);
   return pool;

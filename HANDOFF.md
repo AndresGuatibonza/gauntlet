@@ -176,8 +176,14 @@ limit is 300 s (`maxDuration` on the Hobby plan).
 
 ## 4. Data model (Postgres)
 
-Migrations live in `apps/web/lib/migrations/` and are applied by hand, in
-order, in the Supabase SQL Editor. All are idempotent.
+Migrations live in `apps/web/lib/migrations/` and are applied with
+`npm run migrate --workspace=web` (runner in `lib/migrate.ts`). The runner
+records each applied file with its SHA-256 in `schema_migrations`, applies
+each pending file in its own transaction under an advisory lock, and
+stops if an applied file was later edited (a change belongs in a new
+file). Files must be numbered consecutively (`NNN_snake_case.sql`). Every
+migration so far is idempotent, so a database migrated by hand before the
+runner existed is adopted by simply running it.
 
 **`001_init.sql` — `scan_jobs`**: one row per scan. `id` (uuid), `url`,
 `category`, `status`, `evidence_packet` (jsonb), `opportunity_report`
@@ -260,19 +266,34 @@ intent, `wrong` ratings as a proxy for false confidence).
 | `SCAN_IP_HASH_SECRET` | yes | Key for hashing client IPs (long random string). |
 | `SCAN_LIMIT_PER_CLIENT_PER_DAY` | no | Default 3. |
 | `SCAN_LIMIT_GLOBAL_PER_DAY` | no | Default 20. |
+| `CRON_SECRET` | yes, for maintenance | Authorizes the daily maintenance endpoint; Vercel Cron sends it automatically. At least 16 characters. Without it the endpoint refuses every call. |
+| `SCAN_RETENTION_DAYS` | no | Default 180, minimum 30. Scans older than this are deleted with their events. |
+| `MIGRATION_DATABASE_URL` | no | Database for `npm run migrate`; defaults to `DATABASE_URL`. |
+| `DATABASE_SSL` | tests only | `disable` turns TLS off, and is refused for any host other than localhost. CI and local test databases only. |
 | `NODE_EXTRA_CA_CERTS` | local only | Needed on machines with TLS-intercepting security software; see README and `npm run verify-tls`. |
 
 - Deploy: push to `main`; Vercel builds `apps/web` (Root Directory
-  `apps/web`). **Apply any new migration before deploying the code that
-  uses it.**
+  `apps/web`). **Run `npm run migrate --workspace=web` against Supabase
+  before deploying code that needs a new migration.**
+- **Daily maintenance** (`apps/web/vercel.json` cron → `GET
+  /api/cron/maintenance`, 07:17 UTC): fails scans stuck in flight past 10
+  minutes, clears client IP hashes older than 48 h, and deletes scans older
+  than `SCAN_RETENTION_DAYS` with their events. Idempotent.
+- **Stuck scans** also end on their own: the polling endpoint fails a scan
+  that is still in flight 10 minutes after it was created (the pipeline is
+  capped at 300 s, so it can no longer finish), records `scan_failed`, and
+  the page shows the reason with "Try again".
+- **CI** (`.github/workflows/ci.yml`, every push and PR): typecheck, lint,
+  tests, CLI and web builds; and a Postgres 16 job that runs the
+  migrations twice and the database integration tests.
 - Local: `cd apps/web && npm run dev`. Without Vercel in front, every
   local request shares one quota bucket; raise
   `SCAN_LIMIT_PER_CLIENT_PER_DAY` in `.env.local`.
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 180 tests:
-CLI 21, core 85, web 72). `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 190 tests:
+CLI 21, core 85, web 87), plus 16 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -294,11 +315,14 @@ expected to be clean.
 - `apps/web`: component tests with jsdom and Testing Library (status
   tracker, cards and their actions, theme switch) and unit tests for the
   quota and event validation.
-- Not in the automated suite: SQL behavior. The quota's concurrency
-  guarantee (12 concurrent requests with a limit of 3 create exactly 3
-  jobs; 5 without the advisory lock) and the events table's dedupe,
-  upsert, constraints and threshold queries were verified by hand against
-  a real Postgres 16.
+- Database integration tests (`apps/web/tests-db`, `npm run test:db`):
+  the migration runner (fresh database, adopting a hand-migrated one with
+  data, edited-file refusal, rollback of a failing file, concurrent
+  runners), the scan quota under 12 concurrent requests, event dedupe,
+  rating upsert and constraints, cascade deletes, progress, stale-scan
+  expiry and the retention purge. Each file uses its own throwaway
+  database. Run locally with
+  `TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres DATABASE_SSL=disable npm run test:db --workspace=web`.
 
 ## 9. Technical decisions
 
@@ -316,6 +340,10 @@ expected to be clean.
 | A new packet for trace-enriched analysis | The public-scan packet stays a faithful record of the public scan; lineage links the two. |
 | Deterministic trace adapter, no LLM summarization | Every A* number is reproducible from Token Profiler's data. |
 | `notEvaluable` instead of silence | An unevaluated check must not read as "no problem found". |
+| Migration runner with checksums instead of hand-applied SQL | A forgotten or edited migration is caught before it reaches production; concurrent runs are serialized. |
+| Retention: IP hashes 48 h, scans 180 days | The quota only needs 24 h of IP hashes; 180 days covers a validation round and its follow-up. Closes PRD §18's retention question. |
+| Stuck scans failed by the polling endpoint, not only the cron | A visitor watching a killed scan gets an answer within one poll, not the next day. |
+| `DATABASE_SSL=disable` only for localhost | CI needs a plain local Postgres; refusing it for any other host means it can never turn TLS off against Supabase. |
 | `@gauntlet/core` has no build step | Next.js transpiles it (`transpilePackages`); one source of truth for CLI and web. |
 
 ## 10. Known limitations and risks
@@ -325,24 +353,23 @@ expected to be clean.
    deployed app; one is Next.js via postcss (build-time CSS processing).
    All fixes need major upgrades (Next 16, Vitest 5); do them as one
    planned upgrade, never `npm audit fix --force`.
-2. **No Postgres in CI**: the SQL guarantees above are not re-checked
-   automatically. First CI improvement: a Postgres service container
-   running those scenarios.
-3. **No migration runner**: five hand-applied migrations; add a runner
-   with a `schema_migrations` table before the next one.
-4. **No data-retention policy** (PRD §18): `scan_jobs` and `scan_events`
-   are kept indefinitely.
-5. **IP-based quota**: shared IPs share a quota and IPv6 rotation can
+2. **Retention of event IP hashes**: `scan_events.client_ip_hash` is kept
+   until its scan is deleted (180 days), because it is part of the
+   per-client dedupe key; clearing it early could merge distinct visitors'
+   events. Revisit if a shorter window is required.
+3. **Maintenance runs once a day** (Vercel Hobby cron limit). Stuck scans
+   don't depend on it (the polling endpoint ends them), but the purge does.
+4. **IP-based quota**: shared IPs share a quota and IPv6 rotation can
    partly evade the per-client limit; the global daily cap is the real
    cost ceiling. Move to per-account quotas once authentication exists.
-6. **Scan coverage**: static HTML only, so JavaScript-rendered sites yield
+5. **Scan coverage**: static HTML only, so JavaScript-rendered sites yield
    little evidence and bot-blocking sites fail with a clear message.
    Mature products often get 2–3 cards rather than 5.
-7. **300 s function limit** (Vercel Hobby): a run that needs both
+6. **300 s function limit** (Vercel Hobby): a run that needs both
    corrective retries could approach it; move to Pro (800 s) only if a real
    run shows it.
-8. **Signup is a placeholder**: it only carries the scan and card ids.
-9. **Token Profiler coverage**: AI evidence covers only the chosen
+7. **Signup is a placeholder**: it only carries the scan and card ids.
+8. **Token Profiler coverage**: AI evidence covers only the chosen
    connectors and window, and at most 500 sessions. Token Profiler has no
    date filter, so every session of a connector is listed and filtered
    locally. Product traces must arrive through a non-coding-agent
@@ -356,7 +383,7 @@ expected to be clean.
    against the thresholds (top-3 usefulness ≥70%, action intent ≥30%,
    signup-equivalent ≥20%, false confidence <10%).
 2. Resolve the PRD §18 questions the validation raises, starting with
-   data retention and supported product categories.
+   supported product categories (data retention is decided; see §7).
 3. If the thresholds are met: authentication, then Build Order #4 (GitHub
    deep scan), #5 ("Build this" implementation packages), #6 (first
    production data adapter) and #7 (Experiment Ledger).
