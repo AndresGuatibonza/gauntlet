@@ -86,9 +86,32 @@ export const ActionPackageSchema = ActionPackageDraftSchema.extend({
 });
 export type ActionPackage = z.infer<typeof ActionPackageSchema>;
 
-// A component that looks like a file or code path ("src/app.tsx",
+// A component that names a file or code path ("src/app.tsx",
 // "components/Pricing/"): the package has no repository to know those from.
-const FILE_PATH_LIKE = /\.(tsx?|jsx?|mjs|py|go|rb|java|kt|swift|php|cs|css|scss|html|vue|svelte|json|ya?ml|sql)\b|[\w-]+\/[\w./-]+/i;
+// A slash alone is not a path: product terms use it ("content block/snippet",
+// "signup/onboarding"), so a slashed word is flagged only when it looks like
+// code -- relative or home-anchored, ending in "/", three or more segments, or
+// starting with a conventional source directory (lowercase, as in code).
+const SOURCE_FILE_EXTENSION = /\.(tsx?|jsx?|mjs|cjs|py|go|rb|java|kt|swift|php|cs|css|scss|html|vue|svelte|json|ya?ml|sql)\b/i;
+const SOURCE_DIRECTORIES = new Set([
+  "src", "app", "apps", "lib", "libs", "components", "pages", "packages", "server", "client", "api", "routes",
+  "utils", "hooks", "styles", "public", "test", "tests", "spec", "config", "scripts", "modules", "views",
+  "controllers", "models", "services", "store", "assets", "internal", "cmd", "pkg",
+]);
+
+/** True when a likelyComponents entry names a file or code path rather than a part of the product. */
+export function looksLikeCodePath(component: string): boolean {
+  if (SOURCE_FILE_EXTENSION.test(component)) return true;
+  return component.split(/\s+/).some((rawWord) => {
+    const word = rawWord.replace(/^[("'`]+|[)"'`,.;:]+$/g, "");
+    if (!word.includes("/") || word.includes("://")) return false;
+    if (/^(\.{1,2}|~)\//.test(word)) return true;
+    if (/[\w-]\/$/.test(word)) return true;
+    const segments = word.split("/").filter(Boolean);
+    if (segments.length >= 3) return true;
+    return segments.length >= 2 && SOURCE_DIRECTORIES.has(segments[0]!);
+  });
+}
 
 /** The card's own cited evidence, resolved against the packet (E* and A* items). */
 export function citedEvidenceFor(card: OpportunityCard, packet: EvidencePacket): CitedEvidence[] {
@@ -161,7 +184,7 @@ export function checkDraftGrounding(draft: ActionPackageDraft, card: Opportunity
   if (foreign.length > 0) {
     problems.push(`evidenceRefs may only cite the card's evidence (${card.evidenceRefs.join(", ")}); found ${foreign.join(", ")}.`);
   }
-  const pathLike = draft.likelyComponents.filter((c) => FILE_PATH_LIKE.test(c));
+  const pathLike = draft.likelyComponents.filter(looksLikeCodePath);
   if (pathLike.length > 0) {
     problems.push(
       `likelyComponents must be product terms, not files or code paths (no repository is connected): ${pathLike.map((c) => `"${c}"`).join(", ")}.`,

@@ -1,14 +1,15 @@
 /**
  * The signed-in user's Experiment Ledger (PRD Build Order #7: "learning
  * compounds across iterations"): every experiment started from their saved
- * reports, with its status, result, decision and outcome, newest first.
+ * reports, with its status, result, decision and outcome, newest first --
+ * then the saved reports themselves, the way back to start the next one.
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { FadeUp } from "@/components/motion";
 import { readAuthConfig } from "@/lib/auth/config";
 import { getSessionUser } from "@/lib/auth/server";
-import { listExperimentsForUser, type LedgerEntry } from "@/lib/store";
+import { listExperimentsForUser, listSavedReportsForUser, type LedgerEntry, type SavedReport } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +26,10 @@ export default async function LedgerPage(): Promise<React.JSX.Element> {
   if (!user) redirect("/signup?next=/ledger");
 
   let entries: LedgerEntry[] = [];
+  let reports: SavedReport[] = [];
   let failed = false;
   try {
-    entries = await listExperimentsForUser(user.id);
+    [entries, reports] = await Promise.all([listExperimentsForUser(user.id), listSavedReportsForUser(user.id)]);
   } catch (err) {
     console.error("[ledger]", err);
     failed = true;
@@ -40,8 +42,17 @@ export default async function LedgerPage(): Promise<React.JSX.Element> {
       {failed && <p className="error" role="alert">Couldn&apos;t load your experiments. Please reload the page.</p>}
       {!failed && entries.length === 0 && (
         <p className="muted" style={{ marginTop: 28 }}>
-          Nothing here yet. Scan a product, then use <strong>Build this</strong> on an opportunity to start one.{" "}
-          <Link href="/">Scan a product</Link>
+          {reports.length > 0 ? (
+            <>
+              No experiments yet. Open one of your saved reports below and use <strong>Build this</strong> on an
+              opportunity to start one.
+            </>
+          ) : (
+            <>
+              Nothing here yet. Scan a product, sign in from its report to save it, then use <strong>Build this</strong>{" "}
+              on an opportunity to start an experiment. <Link href="/">Scan a product</Link>
+            </>
+          )}
         </p>
       )}
       <ol className="ledger-list">
@@ -72,6 +83,30 @@ export default async function LedgerPage(): Promise<React.JSX.Element> {
           </li>
         ))}
       </ol>
+      {!failed && reports.length > 0 && <SavedReports reports={reports} />}
     </FadeUp>
+  );
+}
+
+function SavedReports({ reports }: { reports: SavedReport[] }): React.JSX.Element {
+  return (
+    <section className="saved-reports" aria-labelledby="saved-reports-title">
+      <h2 id="saved-reports-title" className="saved-reports-title">
+        Saved reports
+      </h2>
+      <ul className="saved-report-list">
+        {reports.map((r) => (
+          <li key={r.scanId}>
+            <Link href={`/scans/${r.scanId}`} className="saved-report">
+              <span className="saved-report-name">{r.productName}</span>
+              <span className="muted saved-report-meta">
+                {new Date(r.scannedAt).toLocaleDateString("en-US", { dateStyle: "medium" })} &middot;{" "}
+                {r.opportunityCount} {r.opportunityCount === 1 ? "opportunity" : "opportunities"}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

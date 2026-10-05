@@ -199,9 +199,16 @@ limit is 300 s (`maxDuration` on the Hobby plan).
    one must fit the package quota (5 per client, 40 in total per 24 h,
    separate from scans) and is inserted as `generating`. Concurrent clicks
    therefore cost one Claude call.
-3. `after()` runs `generateActionPackage`. On success, one transaction
-   stores the package, creates its `planned` `experiment_records` row and
-   records `action_package_generated` and `experiment_created`.
+3. `after()` runs `generateActionPackage`. The draft is validated against
+   the contract plus grounding checks (only the card's evidence; likely
+   components in product terms, never files or code paths, with one
+   corrective retry). The code-path check (`looksLikeCodePath`) flags file
+   extensions and slashed words that look like code (`./x`, `x/`, three or
+   more segments, or a source directory such as `src/`, `components/`), not
+   any slash: a production run was rejected for "content block/snippet".
+   On success, one transaction stores the package, creates its `planned`
+   `experiment_records` row and records `action_package_generated` and
+   `experiment_created`.
 4. The card polls `GET` every 3 s and then shows the brief: objective,
    feature flag, approach, acceptance criteria, measurement, rollback,
    non-goals, risks, likely components, what a repository connection would
@@ -228,7 +235,9 @@ limit is 300 s (`maxDuration` on the Hobby plan).
    .../experiment`): the shared rules in `@gauntlet/core` decide what is
    allowed, the write is optimistic (a second tab's conflicting decision
    gets 409), and a decision records `experiment_decision_recorded`.
-4. Without `NEXT_PUBLIC_SUPABASE_*`, none of this appears and nothing else
+4. `/ledger` lists the user's experiments, then their saved reports (the
+   way back to a report to start the next experiment).
+5. Without `NEXT_PUBLIC_SUPABASE_*`, none of this appears and nothing else
    changes.
 
 ## 4. Data model (Postgres)
@@ -370,8 +379,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 260 tests:
-CLI 35, core 100, web 127), plus 30 database integration tests. `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 275 tests:
+CLI 35, core 112, web 127), plus 31 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,

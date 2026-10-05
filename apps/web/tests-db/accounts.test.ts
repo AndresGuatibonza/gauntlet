@@ -126,6 +126,31 @@ describe("web Experiment Ledger", () => {
   });
 });
 
+describe("saved reports", () => {
+  it("lists only the user's finished saved reports, newest first, with their opportunity count", async () => {
+    const carol = "cccccccc-0000-4000-8000-000000000003";
+    expect(await store.listSavedReportsForUser(carol)).toEqual([]);
+
+    const older = await scan("https://older.example.com/");
+    await sql.query(
+      `update scan_jobs set created_at = now() - interval '1 day', opportunity_report = '{"cards":[{},{},{}]}' where id = $1`,
+      [older.id],
+    );
+    const newer = await scan("https://newer.example.com/");
+    const running = await scan("https://running.example.com/");
+    const unclaimed = await scan("https://unclaimed.example.com/");
+    for (const s of [older, newer, running]) expect((await store.claimScan(s.id, s.token, carol)).outcome).toBe("claimed");
+    await sql.query(`update scan_jobs set status = 'analyzing' where id = $1`, [running.id]);
+
+    const reports = await store.listSavedReportsForUser(carol);
+    expect(reports.map((r) => r.scanId)).toEqual([newer.id, older.id]);
+    expect(reports.map((r) => r.opportunityCount)).toEqual([0, 3]);
+    expect(reports[1]!.productUrl).toBe("https://older.example.com");
+    expect(reports.some((r) => r.scanId === unclaimed.id)).toBe(false);
+    expect(await store.listSavedReportsForUser(BOB)).toEqual([]);
+  });
+});
+
 describe("retention with accounts", () => {
   it("purges old anonymous scans but keeps saved ones", async () => {
     const saved = await scan("https://kept.com/");

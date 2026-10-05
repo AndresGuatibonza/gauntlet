@@ -319,7 +319,7 @@ without accounts, exactly as before. With them:
   running, records the decision (ship / iterate / discard) with its
   result, and later an outcome -- the same rules as `gauntlet ledger
   record` (shared in `@gauntlet/core`). `/ledger` lists every experiment
-  from the user's saved reports.
+  from the user's saved reports, and the saved reports themselves.
 
 One-time setup:
 

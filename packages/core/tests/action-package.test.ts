@@ -83,12 +83,31 @@ describe("generateActionPackage", () => {
     expect(checkDraftGrounding(draft({ evidenceRefs: ["E1", "E9"] }), card).join(" ")).toContain("found E9");
   });
 
-  it.each([["components/Pricing/"], ["app.vue"], ["the Next.js layout"]])("rejects path-like component %s", (c) => {
+  it.each([
+    ["components/Pricing/"],
+    ["components/Pricing"],
+    ["app.vue"],
+    ["the Next.js layout"],
+    ["src/components/Hero.tsx"],
+    ["the hero in ./marketing/hero"],
+    ["~/web/pricing"],
+    ["marketing/pricing/table"],
+    ["the pricing table (lib/pricing)"],
+    ["pricing-page/"],
+  ])("rejects path-like component %s", (c) => {
     expect(checkDraftGrounding(draft({ likelyComponents: [c] }), card)).toHaveLength(1);
   });
 
-  it("accepts product-term components with slashes in prose", () => {
-    expect(checkDraftGrounding(draft({ likelyComponents: ["the signup / onboarding flow"] }), card)).toEqual([]);
+  // Real production false positive (2026-10-05): a slash in a product term.
+  it.each([
+    ["the signup / onboarding flow"],
+    ["Shared marketing-page pricing content block/snippet (new reusable component)"],
+    ["the signup/onboarding flow"],
+    ["API/webhooks settings page"],
+    ["the pricing page at https://www.intercom.com/pricing/plans/compare"],
+    ["the /pricing page"],
+  ])("accepts product-term component %s", (c) => {
+    expect(checkDraftGrounding(draft({ likelyComponents: [c] }), card)).toEqual([]);
   });
 
   it("fails clearly after two invalid responses", async () => {

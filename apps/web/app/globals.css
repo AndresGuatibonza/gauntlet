@@ -1041,6 +1041,50 @@ button.account-signout:hover:not(:disabled) {
   color: var(--accent);
 }
 
+.saved-reports {
+  margin-top: 44px;
+}
+
+.saved-reports-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.saved-report-list {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.saved-report {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  text-decoration: none;
+  min-width: 0;
+}
+
+.saved-report:hover .saved-report-name {
+  text-decoration: underline;
+}
+
+.saved-report-name {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.saved-report-meta {
+  font-size: 13px;
+}
+
 @media (max-width: 560px) {
   .header-actions {
     gap: 12px;

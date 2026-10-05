@@ -747,3 +747,38 @@ export async function listExperimentsForUser(userId: string): Promise<LedgerEntr
     cardTitle: r.card_title,
   }));
 }
+
+export interface SavedReport {
+  scanId: string;
+  productName: string;
+  productUrl: string;
+  scannedAt: string;
+  opportunityCount: number;
+}
+
+/** The finished reports saved to the user's workspaces, newest first: the way back to each one. */
+export async function listSavedReportsForUser(userId: string): Promise<SavedReport[]> {
+  const result = await getPool().query<{
+    id: string;
+    product_name: string;
+    product_url: string;
+    created_at: Date;
+    card_count: number | null;
+  }>(
+    `select s.id, w.product_name, w.product_url, s.created_at,
+            jsonb_array_length(s.opportunity_report->'cards') as card_count
+       from scan_jobs s
+       join workspaces w on w.id = s.workspace_id
+      where w.owner_user_id = $1 and s.status = 'done'
+      order by s.created_at desc
+      limit 50`,
+    [userId],
+  );
+  return result.rows.map((r) => ({
+    scanId: r.id,
+    productName: r.product_name,
+    productUrl: r.product_url,
+    scannedAt: r.created_at.toISOString(),
+    opportunityCount: r.card_count ?? 0,
+  }));
+}
