@@ -8,11 +8,10 @@
  * Kept out of index.ts so the rules are unit-testable without Claude.
  */
 import {
-  ExperimentDecisionSchema,
-  ExperimentRecordSchema,
+  applyExperimentUpdate,
   generateActionPackage,
   planExperimentRecord,
-  type ExperimentRecord,
+  type ExperimentUpdate,
   type LlmClient,
   type OpportunityReport,
 } from "@gauntlet/core";
@@ -68,53 +67,8 @@ export async function buildPackage(
   return { saved: store.saveActionPackage(reportId, cardIndex, pkg, planExperimentRecord(pkg)), created: true };
 }
 
-export interface ExperimentUpdate {
-  running?: boolean;
-  decision?: string;
-  result?: string;
-  outcome?: string;
-}
-
-/**
- * The ledger's transition rules: planned -> running -> decided (or straight
- * to decided). A decision needs its result. A decided record is history and
- * can't be changed; an outcome (what happened after the decision) can still
- * be added to it once.
- */
-export function applyExperimentUpdate(current: ExperimentRecord, update: ExperimentUpdate): ExperimentRecord {
-  const { running, decision, result, outcome } = update;
-  if (!running && decision === undefined && result === undefined && outcome === undefined) {
-    throw new LedgerError("Nothing to record: pass --running, or --decision with --result, and/or --outcome.");
-  }
-  if (running && decision !== undefined) throw new LedgerError("Pass either --running or --decision, not both.");
-
-  if (current.status === "decided") {
-    if (running || decision !== undefined || result !== undefined) {
-      throw new LedgerError("This experiment is already decided; a decision is history. Record a new experiment instead.");
-    }
-    if (current.outcome) throw new LedgerError("This experiment already has an outcome recorded.");
-    return ExperimentRecordSchema.parse({ ...current, outcome: outcome!.trim() });
-  }
-
-  if (running) {
-    if (current.status === "running") throw new LedgerError("This experiment is already running.");
-    if (result !== undefined || outcome !== undefined) throw new LedgerError("--result and --outcome are recorded with --decision.");
-    return ExperimentRecordSchema.parse({ ...current, status: "running" });
-  }
-
-  if (decision === undefined) throw new LedgerError("--result and --outcome need --decision (ship, iterate or discard).");
-  const parsedDecision = ExperimentDecisionSchema.safeParse(decision);
-  if (!parsedDecision.success) throw new LedgerError(`--decision must be ship, iterate or discard; got "${decision}".`);
-  if (!result?.trim()) throw new LedgerError("A decision needs its --result: what the experiment showed.");
-
-  return ExperimentRecordSchema.parse({
-    ...current,
-    status: "decided",
-    decision: parsedDecision.data,
-    result: result.trim(),
-    outcome: outcome?.trim() || null,
-  });
-}
+// The transition rules live in @gauntlet/core so the web app enforces the same ones.
+export { applyExperimentUpdate, type ExperimentUpdate } from "@gauntlet/core";
 
 export function recordExperiment(store: GauntletStore, id: number, update: ExperimentUpdate): SavedExperiment {
   const experiment = store.getExperiment(id);

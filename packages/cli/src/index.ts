@@ -26,6 +26,7 @@ import {
   TokenProfilerError,
   isPopulatedAiEvidence,
   ActionPackageError,
+  ExperimentUpdateError,
   renderActionPackageMarkdown,
 } from "@gauntlet/core";
 import { buildPackage, formatLedger, LedgerError, recordExperiment } from "./ledger.js";
@@ -355,7 +356,7 @@ program
       if (opts.out) console.log(`Brief written to ${opts.out}`);
     } catch (err) {
       console.error(
-        err instanceof LedgerError || err instanceof ActionPackageError || err instanceof LlmCallError
+        err instanceof LedgerError || err instanceof ActionPackageError || err instanceof LlmCallError || err instanceof ExperimentUpdateError
           ? `Error: ${err.message}`
           : `Error (unexpected): ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -400,7 +401,7 @@ ledger
         const updated = recordExperiment(store, id, opts);
         console.log(formatLedger([updated]));
       } catch (err) {
-        console.error(err instanceof LedgerError ? `Error: ${err.message}` : `Error (unexpected): ${err instanceof Error ? err.message : String(err)}`);
+        console.error(err instanceof LedgerError || err instanceof ExperimentUpdateError ? `Error: ${err.message}` : `Error (unexpected): ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = 1;
       } finally {
         store.close();

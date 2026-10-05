@@ -26,10 +26,13 @@ export function ActionPackagePanel({
   view,
   onRetry,
   connectRepoHref,
+  tracking,
 }: {
   view: PackageView;
   onRetry: () => void;
   connectRepoHref: string;
+  /** Experiment Ledger tracking, shown under a ready brief (scan-report.tsx decides what fits the viewer). */
+  tracking?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <motion.section
@@ -51,6 +54,7 @@ export function ActionPackagePanel({
         </div>
       )}
       {view.status === "ready" && <PackageBody view={view} connectRepoHref={connectRepoHref} />}
+      {view.status === "ready" && tracking}
     </motion.section>
   );
 }

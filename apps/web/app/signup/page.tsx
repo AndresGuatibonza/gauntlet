@@ -1,45 +1,90 @@
 /**
- * Placeholder only (confirmed with Andres: "solo un placeholder por
- * ahora" -- real auth is out of scope for Build Order #3). Keeps the
- * originating scan id in the URL so that when real signup lands, wiring
- * "carry this report over into the new account" (PRD §8.5) has a job id
- * to attach, instead of that state having been silently dropped here.
- * The "Connect your repository" link under a card's implementation brief
- * also passes the card (`card`, its index in the report), so the selected
- * opportunity survives the hop (PRD §17: "preserves the selected
- * opportunity through signup"); repo connection is what will turn that
- * brief repo-aware (Build Order #4).
+ * Sign in (PRD §8.6, §17): accounts exist so a report can be saved to a
+ * workspace and its experiments tracked. Reached from a report ("Sign in
+ * with GitHub", "Connect your repository") with ?from=<scan>&card=<n>; after
+ * GitHub, the visitor returns to that report, which saves itself. Without
+ * Supabase Auth configured the page says accounts aren't available, and
+ * nothing else changes.
  */
 import Link from "next/link";
 import { FadeUp } from "@/components/motion";
+import { SignInPanel } from "@/components/sign-in-panel";
+import { readAuthConfig, safeNextPath } from "@/lib/auth/config";
+import { getSessionUser } from "@/lib/auth/server";
 
-export default async function SignupPlaceholderPage({
+export const dynamic = "force-dynamic";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const ERRORS: Record<string, string> = {
+  denied: "GitHub sign-in was cancelled.",
+  missing_code: "GitHub didn't complete the sign-in. Please try again.",
+  exchange: "The sign-in link expired or was already used. Please try again.",
+  unavailable: "Sign-in isn't available right now.",
+};
+
+export default async function SignupPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; card?: string }>;
+  searchParams: Promise<{ from?: string; card?: string; next?: string; error?: string }>;
 }): Promise<React.JSX.Element> {
-  const { from, card } = await searchParams;
+  const { from, card, next, error } = await searchParams;
+  const scanId = from && UUID.test(from) ? from : null;
+  const returnTo = scanId ? `/scans/${scanId}` : safeNextPath(next, "/");
   const cardNumber = card !== undefined && /^\d{1,2}$/.test(card) ? Number(card) + 1 : null;
+
+  if (!readAuthConfig()) {
+    return (
+      <FadeUp>
+        <p className="eyebrow">Coming soon</p>
+        <h2 style={{ fontSize: 30, marginTop: 10 }}>Accounts aren&apos;t available yet</h2>
+        <p className="lede">Reports, briefs and feedback all work without an account in the meantime.</p>
+        {scanId && (
+          <Link href={returnTo}>
+            <button className="secondary" style={{ marginTop: 24 }}>Back to report</button>
+          </Link>
+        )}
+      </FadeUp>
+    );
+  }
+
+  const user = await getSessionUser();
+  if (user) {
+    return (
+      <FadeUp>
+        <h2 style={{ fontSize: 30 }}>You&apos;re signed in{user.login ? ` as @${user.login}` : ""}</h2>
+        <p className="lede">Reports you run in this browser are saved to your workspace when you open them.</p>
+        <div style={{ display: "flex", gap: 12, marginTop: 24, flexWrap: "wrap" }}>
+          <Link href={returnTo}>
+            <button>{scanId ? "Back to report" : "Scan a product"}</button>
+          </Link>
+          <Link href="/ledger">
+            <button className="secondary">Your experiments</button>
+          </Link>
+        </div>
+      </FadeUp>
+    );
+  }
+
   return (
     <FadeUp>
-      <p className="eyebrow">Coming soon</p>
-      <h2 style={{ fontSize: 30, marginTop: 10 }}>Accounts aren&apos;t built yet</h2>
+      <h2 style={{ fontSize: 30 }}>Save this report and track what you test</h2>
       <p className="lede">
-        This is a placeholder. When account creation lands, it will pick up right where you left off
-        {from ? ` (report ${from})` : ""} instead of starting over.
+        Sign in to keep {scanId ? "this report" : "your reports"} in a workspace and record what each experiment showed and
+        what you decided.
+        {cardNumber !== null &&
+          ` Connecting a repository to make opportunity #${cardNumber}'s brief point at real files is the next step after this.`}
       </p>
-      {cardNumber !== null && (
-        <p className="muted" style={{ fontSize: 14, marginTop: 12 }}>
-          You asked to connect your repository for opportunity #{cardNumber}, so its implementation brief can point at
-          real files. We&apos;ve noted your interest.
+      {error && ERRORS[error] && (
+        <p className="error" role="alert" style={{ fontSize: 14, marginTop: 16 }}>
+          {ERRORS[error]}
         </p>
       )}
-      {from && (
-        <Link href={`/scans/${from}`}>
-          <button className="secondary" style={{ marginTop: 24 }}>
-            Back to report
-          </button>
-        </Link>
+      <SignInPanel next={returnTo} scanId={scanId} />
+      {scanId && (
+        <p style={{ marginTop: 20, fontSize: 14 }}>
+          <Link href={returnTo}>Back to report</Link>
+        </p>
       )}
     </FadeUp>
   );

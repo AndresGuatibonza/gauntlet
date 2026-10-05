@@ -4,11 +4,19 @@
  * of SQLite -- see lib/migrations/001_init.sql for why this is one table,
  * not the CLI's normalized three.
  */
-import type { ActionPackage, EvidencePacket, ExperimentRecord, OpportunityReport, ReviewRecord } from "@gauntlet/core";
+import {
+  ExperimentRecordSchema,
+  type ActionPackage,
+  type EvidencePacket,
+  type ExperimentRecord,
+  type OpportunityReport,
+  type ReviewRecord,
+} from "@gauntlet/core";
 import { getPool } from "./db.js";
 import { evaluateScanQuota, QUOTA_WINDOW_SECONDS, type QuotaDenial, type ScanLimits } from "./rate-limit.js";
 import type { CardRating, ScanEventType } from "./events.js";
 import type { ScanProgress } from "./progress.js";
+import { canonicalProductUrl, claimTokenMatches } from "./accounts.js";
 
 export type ScanJobStatus = "queued" | "scanning" | "analyzing" | "reviewing" | "done" | "failed";
 
@@ -112,6 +120,8 @@ export async function createScanJobWithinQuota(
   category: "ai_tool" | "ai_saas",
   clientIpHash: string,
   limits: ScanLimits,
+  /** SHA-256 of the claim token handed to the browser (lib/accounts.ts). */
+  claimTokenHash: string | null = null,
 ): Promise<CreateScanJobResult> {
   const client = await getPool().connect();
   try {
@@ -142,8 +152,9 @@ export async function createScanJobWithinQuota(
     }
 
     const inserted = await client.query<{ id: string }>(
-      `insert into scan_jobs (url, category, status, client_ip_hash) values ($1, $2, 'queued', $3) returning id`,
-      [url, category, clientIpHash],
+      `insert into scan_jobs (url, category, status, client_ip_hash, claim_token_hash)
+       values ($1, $2, 'queued', $3, $4) returning id`,
+      [url, category, clientIpHash, claimTokenHash],
     );
     const id = inserted.rows[0]?.id;
     if (!id) {
@@ -333,7 +344,10 @@ export async function purgeExpiredData(policy: RetentionPolicy): Promise<{ ipHas
         where client_ip_hash is not null and created_at < now() - make_interval(hours => $1)`,
       [policy.ipHashHours],
     );
-    const deleted = await client.query(`delete from scan_jobs where created_at < now() - make_interval(days => $1)`, [
+    // Anonymous scans only: a scan saved to an account's workspace is kept.
+    const deleted = await client.query(
+      `delete from scan_jobs where workspace_id is null and created_at < now() - make_interval(days => $1)`,
+      [
       policy.retentionDays,
     ]);
     await client.query("commit");
@@ -526,4 +540,210 @@ export async function failActionPackage(id: string, errorMessage: string): Promi
     `update action_packages set status = 'failed', error_message = $2, updated_at = now() where id = $1 and status = 'generating'`,
     [id, errorMessage],
   );
+}
+
+// ---------------------------------------------------------------------------
+// Accounts: workspaces, claiming scans, the web Experiment Ledger (migration 007)
+// ---------------------------------------------------------------------------
+
+export type ClaimScanResult =
+  | { outcome: "claimed" | "already_yours"; workspaceId: string }
+  | { outcome: "not_found" | "invalid_token" | "claimed_by_other" };
+
+/**
+ * Saves a scan to the user's workspace for that product (created on first
+ * use). Requires the scan's claim token, so only the browser that started
+ * the scan can claim it. Idempotent for the same user.
+ */
+export async function claimScan(scanJobId: string, token: string, userId: string): Promise<ClaimScanResult> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const scan = (
+      await client.query<{ url: string; claim_token_hash: string | null; workspace_id: string | null; evidence_packet: EvidencePacket | null }>(
+        `select url, claim_token_hash, workspace_id, evidence_packet from scan_jobs where id = $1 for update`,
+        [scanJobId],
+      )
+    ).rows[0];
+    if (!scan) {
+      await client.query("rollback");
+      return { outcome: "not_found" };
+    }
+    if (!claimTokenMatches(token, scan.claim_token_hash)) {
+      await client.query("rollback");
+      return { outcome: "invalid_token" };
+    }
+    if (scan.workspace_id) {
+      const owner = (await client.query<{ owner_user_id: string }>(`select owner_user_id from workspaces where id = $1`, [scan.workspace_id]))
+        .rows[0];
+      await client.query("rollback");
+      return owner?.owner_user_id === userId
+        ? { outcome: "already_yours", workspaceId: scan.workspace_id }
+        : { outcome: "claimed_by_other" };
+    }
+    const productUrl = canonicalProductUrl(scan.url);
+    const productName = scan.evidence_packet?.productIdentity.productName ?? new URL(productUrl).hostname;
+    const workspace = await client.query<{ id: string }>(
+      `insert into workspaces (owner_user_id, product_url, product_name) values ($1, $2, $3)
+       on conflict (owner_user_id, product_url) do update set product_name = excluded.product_name
+       returning id`,
+      [userId, productUrl, productName],
+    );
+    const workspaceId = workspace.rows[0]!.id;
+    await client.query(`update scan_jobs set workspace_id = $2, claimed_at = now() where id = $1`, [scanJobId, workspaceId]);
+    await client.query("commit");
+    return { outcome: "claimed", workspaceId };
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** The account that owns a scan (through its workspace), or null when anonymous or unknown. */
+export async function getScanOwner(scanJobId: string): Promise<string | null> {
+  const result = await getPool().query<{ owner_user_id: string }>(
+    `select w.owner_user_id from scan_jobs s join workspaces w on w.id = s.workspace_id where s.id = $1`,
+    [scanJobId],
+  );
+  return result.rows[0]?.owner_user_id ?? null;
+}
+
+export interface StoredExperiment {
+  id: string;
+  scanJobId: string;
+  cardIndex: number;
+  record: ExperimentRecord;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ExperimentRow {
+  id: string;
+  scan_job_id: string;
+  card_index: number;
+  status: ExperimentRecord["status"];
+  hypothesis: string;
+  evidence_snapshot: ExperimentRecord["evidenceSnapshot"];
+  change: ExperimentRecord["change"];
+  experiment: ExperimentRecord["experiment"];
+  result: string | null;
+  decision: ExperimentRecord["decision"];
+  outcome: string | null;
+  decided_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+function iso(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function rowToExperiment(row: ExperimentRow): StoredExperiment {
+  return {
+    id: row.id,
+    scanJobId: row.scan_job_id,
+    cardIndex: row.card_index,
+    record: {
+      hypothesis: row.hypothesis,
+      evidenceSnapshot: row.evidence_snapshot,
+      change: row.change,
+      experiment: row.experiment,
+      status: row.status,
+      result: row.result,
+      decision: row.decision,
+      outcome: row.outcome,
+    },
+    decidedAt: iso(row.decided_at),
+    createdAt: iso(row.created_at)!,
+    updatedAt: iso(row.updated_at)!,
+  };
+}
+
+export async function getExperimentForCard(scanJobId: string, cardIndex: number): Promise<StoredExperiment | null> {
+  const result = await getPool().query<ExperimentRow>(
+    `select * from experiment_records where scan_job_id = $1 and card_index = $2`,
+    [scanJobId, cardIndex],
+  );
+  return result.rows[0] ? rowToExperiment(result.rows[0]) : null;
+}
+
+/**
+ * Writes the next state of an experiment, validated by the shared ledger
+ * rules (the caller computed `next` from `previous` with
+ * applyExperimentUpdate). Optimistic: the write only applies while the
+ * stored status, decision and outcome still equal `previous`, so two tabs
+ * can't record two decisions; otherwise it reports "conflict". Recording a decision also writes the
+ * PRD §11 event experiment_decision_recorded, in the same transaction.
+ */
+export async function updateExperiment(
+  id: string,
+  previous: ExperimentRecord,
+  next: ExperimentRecord,
+  userId: string,
+): Promise<{ outcome: "updated"; experiment: StoredExperiment } | { outcome: "conflict" }> {
+  const record = ExperimentRecordSchema.parse(next);
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const updated = await client.query<ExperimentRow>(
+      `update experiment_records
+          set status = $3, result = $4, decision = $5, outcome = $6, updated_at = now(),
+              decided_at = case when $3 = 'decided' and decided_at is null then now() else decided_at end,
+              decided_by = case when $3 = 'decided' and decided_by is null then $7::uuid else decided_by end
+        where id = $1 and status = $2
+          and decision is not distinct from $8 and outcome is not distinct from $9
+        returning *`,
+      [id, previous.status, record.status, record.result, record.decision, record.outcome, userId, previous.decision, previous.outcome],
+    );
+    const row = updated.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return { outcome: "conflict" };
+    }
+    if (record.status === "decided") {
+      await client.query(
+        `insert into scan_events (scan_job_id, event_type, card_index) values ($1, 'experiment_decision_recorded', $2)
+         on conflict do nothing`,
+        [row.scan_job_id, row.card_index],
+      );
+    }
+    await client.query("commit");
+    return { outcome: "updated", experiment: rowToExperiment(row) };
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export interface LedgerEntry extends StoredExperiment {
+  productName: string;
+  productUrl: string;
+  cardTitle: string;
+}
+
+/** Every experiment in the user's workspaces, newest first. */
+export async function listExperimentsForUser(userId: string): Promise<LedgerEntry[]> {
+  const result = await getPool().query<ExperimentRow & { product_name: string; product_url: string; card_title: string }>(
+    `select e.*, w.product_name, w.product_url, p.package->'card'->>'title' as card_title
+       from experiment_records e
+       join scan_jobs s on s.id = e.scan_job_id
+       join workspaces w on w.id = s.workspace_id
+       join action_packages p on p.id = e.action_package_id
+      where w.owner_user_id = $1
+      order by e.created_at desc
+      limit 200`,
+    [userId],
+  );
+  return result.rows.map((r) => ({
+    ...rowToExperiment(r),
+    productName: r.product_name,
+    productUrl: r.product_url,
+    cardTitle: r.card_title,
+  }));
 }

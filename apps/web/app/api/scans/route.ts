@@ -24,6 +24,7 @@ import { z } from "zod";
 import { createScanJobWithinQuota } from "@/lib/store";
 import { hashClientIp, readIpHashSecret, readScanLimits, type ScanLimits } from "@/lib/rate-limit";
 import { runScanJob } from "@/lib/run-scan";
+import { newClaimToken } from "@/lib/accounts";
 
 export const maxDuration = 300;
 
@@ -65,8 +66,10 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   let jobId: string;
+  let claim: ReturnType<typeof newClaimToken>;
   try {
-    const result = await createScanJobWithinQuota(parsed.data.url, parsed.data.category, clientIpHash, limits);
+    claim = newClaimToken();
+    const result = await createScanJobWithinQuota(parsed.data.url, parsed.data.category, clientIpHash, limits, claim.hash);
     if (!result.ok) {
       return NextResponse.json(
         { error: result.denial.message },
@@ -91,5 +94,7 @@ export async function POST(request: Request): Promise<Response> {
   // status "failed" -- this callback never needs its own try/catch.
   after(() => runScanJob(jobId, parsed.data.url, parsed.data.category));
 
-  return NextResponse.json({ id: jobId }, { status: 202 });
+  // The claim token is shown once: only this browser can later save the
+  // scan to an account (see lib/accounts.ts). Only its hash is stored.
+  return NextResponse.json({ id: jobId, claimToken: claim.token }, { status: 202 });
 }

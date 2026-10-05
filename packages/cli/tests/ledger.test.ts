@@ -108,11 +108,11 @@ describe("ledger transitions", () => {
 
   it.each([
     [{}, /Nothing to record/],
-    [{ decision: "ship" }, /needs its --result/],
+    [{ decision: "ship" }, /needs its result/],
     [{ decision: "maybe", result: "r" }, /ship, iterate or discard/],
-    [{ result: "r" }, /need --decision/],
-    [{ running: true, decision: "ship", result: "r" }, /either --running or --decision/],
-    [{ running: true, result: "r" }, /recorded with --decision/],
+    [{ result: "r" }, /needs a decision/],
+    [{ running: true, decision: "ship", result: "r" }, /not both/],
+    [{ running: true, result: "r" }, /together with the decision/],
   ])("refuses %o", (update, message) => {
     expect(() => applyExperimentUpdate(planned, update)).toThrow(message);
   });

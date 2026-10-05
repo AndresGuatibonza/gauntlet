@@ -408,3 +408,59 @@ export function planExperimentRecord(pkg: ActionPackage): ExperimentRecord {
     outcome: null,
   });
 }
+
+export class ExperimentUpdateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExperimentUpdateError";
+  }
+}
+
+export interface ExperimentUpdate {
+  running?: boolean;
+  decision?: string;
+  result?: string;
+  outcome?: string;
+}
+
+/**
+ * The ledger's transition rules: planned -> running -> decided (or straight
+ * to decided). A decision needs its result. A decided record is history and
+ * can't be changed; an outcome (what happened after the decision) can still
+ * be added to it once.
+ */
+export function applyExperimentUpdate(current: ExperimentRecord, update: ExperimentUpdate): ExperimentRecord {
+  const { running, decision, result, outcome } = update;
+  if (!running && decision === undefined && result === undefined && outcome === undefined) {
+    throw new ExperimentUpdateError("Nothing to record: mark the experiment running, or record a decision with its result, and/or an outcome.");
+  }
+  if (running && decision !== undefined) throw new ExperimentUpdateError("Mark it running or record a decision, not both.");
+
+  if (current.status === "decided") {
+    if (running || decision !== undefined || result !== undefined) {
+      throw new ExperimentUpdateError("This experiment is already decided; a decision is history. Record a new experiment instead.");
+    }
+    if (current.outcome) throw new ExperimentUpdateError("This experiment already has an outcome recorded.");
+    return ExperimentRecordSchema.parse({ ...current, outcome: outcome!.trim() });
+  }
+
+  if (running) {
+    if (current.status === "running") throw new ExperimentUpdateError("This experiment is already running.");
+    if (result !== undefined || outcome !== undefined) throw new ExperimentUpdateError("A result and outcome are recorded together with the decision.");
+    return ExperimentRecordSchema.parse({ ...current, status: "running" });
+  }
+
+  if (decision === undefined) throw new ExperimentUpdateError("A result or outcome needs a decision (ship, iterate or discard).");
+  const parsedDecision = ExperimentDecisionSchema.safeParse(decision);
+  if (!parsedDecision.success) throw new ExperimentUpdateError(`The decision must be ship, iterate or discard; got "${decision}".`);
+  if (!result?.trim()) throw new ExperimentUpdateError("A decision needs its result: what the experiment showed.");
+
+  return ExperimentRecordSchema.parse({
+    ...current,
+    status: "decided",
+    decision: parsedDecision.data,
+    result: result.trim(),
+    outcome: outcome?.trim() || null,
+  });
+}
+

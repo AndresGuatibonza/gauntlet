@@ -15,6 +15,8 @@ import { OpportunityCardView, type CardActions, type CardSection } from "@/compo
 import type { CardRating, ClientEvent } from "@/lib/events";
 import type { ScanJobResponse } from "@/lib/scan-client";
 import { ActionPackagePanel, type PackageView } from "@/components/action-package-panel";
+import { ExperimentTracker } from "@/components/experiment-tracker";
+import { useViewer, type ClaimState, type Viewer } from "@/lib/use-viewer";
 
 const PACKAGE_POLL_MS = 3000;
 /** Generation runs inside one 300 s function; stop polling well after that. */
@@ -77,6 +79,8 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
   // "Build this" implementation briefs, per card index.
   const [packages, setPackages] = useState<Record<number, PackageView>>({});
   const pollTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const { viewer, hasToken, claimState, claimError } = useViewer(job.id);
+  const signInHref = `/signup?from=${job.id}`;
 
   useEffect(() => {
     const timers = pollTimers.current;
@@ -148,6 +152,19 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
     void sendScanEvent(job.id, { type, cardIndex });
   }
 
+  /** Under a ready brief: ledger tracking for the owner, or how to get it. */
+  function trackingFor(cardIndex: number): React.ReactNode {
+    if (viewer?.isOwner) return <ExperimentTracker scanId={job.id} cardIndex={cardIndex} />;
+    if (viewer?.authAvailable && !viewer.signedIn && hasToken) {
+      return (
+        <p className="tracker-note">
+          <a href={signInHref}>Sign in with GitHub</a> to save this report and track this experiment&apos;s result.
+        </p>
+      );
+    }
+    return null;
+  }
+
   function actionsFor(cardIndex: number): CardActions {
     return {
       onSectionOpened: (section) => sectionOpened(cardIndex, section),
@@ -161,6 +178,7 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
           view={packages[cardIndex]}
           onRetry={() => void requestPackage(cardIndex)}
           connectRepoHref={`/signup?from=${job.id}&card=${cardIndex}`}
+          tracking={trackingFor(cardIndex)}
         />
       ) : null,
     };
@@ -184,6 +202,13 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
           Ranked by impact, evidence and effort, from {plural(evidence.length, "piece", "pieces")} of evidence across{" "}
           {plural(pagesRead, "public page", "public pages")}. The first one is the experiment to run next.
         </p>
+        <AccountBanner
+          viewer={viewer}
+          hasToken={hasToken}
+          claimState={claimState}
+          claimError={claimError}
+          signInHref={signInHref}
+        />
       </FadeUp>
 
       <StaggerList className="card-stack">
@@ -220,4 +245,41 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
       </FadeUp>
     </>
   );
+}
+
+/** One line about saving the report: the offer to sign in, or where it was saved. Silent otherwise. */
+function AccountBanner({
+  viewer,
+  hasToken,
+  claimState,
+  claimError,
+  signInHref,
+}: {
+  viewer: Viewer | null;
+  hasToken: boolean;
+  claimState: ClaimState;
+  claimError: string | null;
+  signInHref: string;
+}): React.JSX.Element | null {
+  if (!viewer?.authAvailable) return null;
+  if (claimState === "error" && claimError) {
+    return <p className="account-banner error" role="alert">{claimError}</p>;
+  }
+  if (claimState === "saving") return <p className="account-banner muted">Saving this report to your workspace…</p>;
+  if (viewer.isOwner) {
+    return (
+      <p className="account-banner">
+        {claimState === "saved" ? "Saved to your workspace." : "In your workspace."} <a href="/ledger">Your experiments</a>
+      </p>
+    );
+  }
+  if (!viewer.signedIn && hasToken) {
+    return (
+      <p className="account-banner">
+        <a href={signInHref}>Sign in with GitHub</a>{" "}
+        to save this report and track the experiments you run from it.
+      </p>
+    );
+  }
+  return null;
 }

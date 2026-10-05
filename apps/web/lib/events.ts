@@ -32,6 +32,12 @@ export const SCAN_EVENT_TYPES = [
   // its Experiment Ledger record created (PRD §11).
   "action_package_generated",
   "experiment_created",
+  // Migration 007, PRD §11: sign-in started from a report (browser), sign-in
+  // completed from a report (server, auth callback), and a ledger decision
+  // recorded in the web app (server).
+  "signup_started",
+  "signup_completed",
+  "experiment_decision_recorded",
 ] as const;
 export type ScanEventType = (typeof SCAN_EVENT_TYPES)[number];
 
@@ -63,6 +69,7 @@ export const ClientEventSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("build_this_requested"), cardIndex: CardIndexSchema }).strict(),
+  z.object({ type: z.literal("signup_started") }).strict(),
 ]);
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 

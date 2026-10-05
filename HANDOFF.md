@@ -22,10 +22,10 @@ validation on real products:
 | Additions | Scan quota, cited evidence on cards, "Build this" CTA, card ratings, funnel events, light/dark themes | `apps/web` |
 | Contract Amendment 1 | The product's own AI traces from a local Token Profiler as citable evidence (`A1, A2...`), CLI only | `packages/core`, `packages/cli` |
 | #5 "Build this" handoff (Amendment 2) | Implementation package per card: objective, approach, feature flag, acceptance criteria, measurement, rollback, risks, coding-agent prompt | `packages/core`, `apps/web`, `packages/cli` |
-| #7 Experiment Ledger, minimal (Amendment 2) | Every package starts a `planned` record; results and decisions recorded in the CLI | `packages/core`, `apps/web`, `packages/cli` |
+| #7 Experiment Ledger, minimal (Amendment 2) | Every package starts a `planned` record; results and decisions recorded in the CLI and, for saved reports, in the web app | `packages/core`, `apps/web`, `packages/cli` |
+| Accounts (PRD §8.6, §17) | Sign in with GitHub (Supabase Auth), workspaces per product, saving a report with proof of authorship, `/ledger` | `apps/web` |
 
-Not started: GitHub deep scan (#4), production data adapters (#6), real
-authentication. Until #4, packages are written from the public site only
+Not started: GitHub deep scan (#4), production data adapters (#6). Until #4, packages are written from the public site only
 and name parts of the product, not files.
 
 ## 2. Components
@@ -69,6 +69,13 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `app/api/scans/[id]/cards/[index]/package/route.ts` | `POST` starts (or returns) the card's implementation package; `GET` for polling. |
 | `lib/build-package.ts` | Background package generation inside `after()`; every failure ends in `failed` with a plain message. |
 | `components/action-package-panel.tsx` | The brief inside a card: progress line, then the package with "Copy prompt for your coding agent" and "Download brief (.md)". |
+| `middleware.ts` | Refreshes the Supabase session on page requests (no-op without auth configured). |
+| `lib/auth/` | `config.ts` (optional auth config, same-site redirect guard), `server.ts` (`getSessionUser()` via `getClaims()`), `browser.ts`. |
+| `app/signup/page.tsx`, `components/sign-in-panel.tsx` | Sign in with GitHub; returns to the report the visitor came from. |
+| `app/auth/callback/route.ts`, `app/auth/signout/route.ts` | OAuth code exchange (+ `signup_completed`), sign-out (POST only). |
+| `app/api/scans/[id]/claim`, `.../viewer`, `.../cards/[index]/experiment` | Save a scan to the workspace (claim token), what the viewer may do, owner-only ledger updates. |
+| `lib/accounts.ts`, `lib/claim-storage.ts`, `lib/use-viewer.ts` | Claim tokens and canonical product URLs; the browser's copy of the token; viewer state and the automatic save after sign-in. |
+| `components/experiment-tracker.tsx`, `app/ledger/page.tsx`, `components/account-nav.tsx` | Ledger tracking under a brief, the user's experiments, header account links. |
 | `components/activity-line.tsx` | The live "what it's doing now" line under the tracker. |
 | `lib/scan-client.ts` | Polling hook, job response type, stage phrases and the activity-line selection rule. |
 | `lib/progress.ts` | Serialized, best-effort progress writer used by the pipeline. |
@@ -206,6 +213,24 @@ limit is 300 s (`maxDuration` on the Hobby plan).
    ship|iterate|discard --result "..." [--outcome "..."]` completes the
    record. A decided record is final.
 
+### Accounts
+
+1. Signing in (`/signup?from=<scan>`) starts GitHub OAuth through Supabase
+   Auth (`signup_started` when it starts from a report). The callback
+   exchanges the code for a session cookie, records `signup_completed`, and
+   returns to the report (same-site paths only).
+2. The report asks `GET /api/scans/:id/viewer` what the visitor may do. A
+   signed-in visitor whose browser holds the scan's claim token (it ran the
+   scan) saves it automatically with `POST /api/scans/:id/claim`; the
+   token is then forgotten. Claiming is atomic: two accounts racing for one
+   scan resolve to one owner.
+3. Under a brief, the owner tracks the experiment (`POST
+   .../experiment`): the shared rules in `@gauntlet/core` decide what is
+   allowed, the write is optimistic (a second tab's conflicting decision
+   gets 409), and a decision records `experiment_decision_recorded`.
+4. Without `NEXT_PUBLIC_SUPABASE_*`, none of this appears and nothing else
+   changes.
+
 ## 4. Data model (Postgres)
 
 Migrations live in `apps/web/lib/migrations/` and are applied with
@@ -259,6 +284,14 @@ exactly when decided, and always with its result). Both cascade with their
 scan. Widens the event constraints for `action_package_generated` and
 `experiment_created` (card events).
 
+**`007_accounts.sql`**: `workspaces` (owner user id, canonical product
+URL, name; one per product per account); `scan_jobs.claim_token_hash`,
+`workspace_id`, `claimed_at`; `experiment_records.decided_by`; events
+`signup_started`, `signup_completed` (report-level) and
+`experiment_decision_recorded` (card event). User ids are Supabase Auth
+ids stored without a foreign key into the `auth` schema, so the schema
+also runs on plain Postgres (CI).
+
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
 intent, `wrong` ratings as a proxy for false confidence).
@@ -307,6 +340,7 @@ intent, `wrong` ratings as a proxy for false confidence).
 | `SCAN_IP_HASH_SECRET` | yes | Key for hashing client IPs (long random string). |
 | `SCAN_LIMIT_PER_CLIENT_PER_DAY` | no | Default 3. |
 | `SCAN_LIMIT_GLOBAL_PER_DAY` | no | Default 20. |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | no | Turn on accounts (Supabase Auth, GitHub). Public values; never the secret key. Setup steps in the README. |
 | `PACKAGE_LIMIT_PER_CLIENT_PER_DAY` | no | Default 5. Implementation briefs per client per 24 h. |
 | `PACKAGE_LIMIT_GLOBAL_PER_DAY` | no | Default 40. Implementation briefs in total per 24 h. |
 | `CRON_SECRET` | yes, for maintenance | Authorizes the daily maintenance endpoint; Vercel Cron sends it automatically. At least 16 characters. Without it the endpoint refuses every call. |
@@ -320,8 +354,9 @@ intent, `wrong` ratings as a proxy for false confidence).
   before deploying code that needs a new migration.**
 - **Daily maintenance** (`apps/web/vercel.json` cron → `GET
   /api/cron/maintenance`, 07:17 UTC): fails scans stuck in flight past 10
-  minutes, clears client IP hashes (scans and packages) older than 48 h, and deletes scans older
-  than `SCAN_RETENTION_DAYS` with their events. Idempotent.
+  minutes, clears client IP hashes (scans and packages) older than 48 h,
+  and deletes anonymous scans older than `SCAN_RETENTION_DAYS` with their
+  events; scans saved to a workspace are kept. Idempotent.
 - **Stuck scans** also end on their own: the polling endpoint fails a scan
   that is still in flight 10 minutes after it was created (the pipeline is
   capped at 300 s, so it can no longer finish), records `scan_failed`, and
@@ -335,8 +370,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 230 tests:
-CLI 35, core 100, web 100), plus 24 database integration tests. `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 260 tests:
+CLI 35, core 100, web 127), plus 30 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -365,7 +400,10 @@ expected to be clean.
   rating upsert and constraints, cascade deletes, progress, stale-scan
   expiry, the retention purge, and packages (10 concurrent clicks start one
   generation, package quota, retry cap, stuck generations, ledger record
-  and events written exactly once, constraints, cascades). Each file uses its own throwaway
+  and events written exactly once, constraints, cascades), and accounts
+  (claim tokens, one workspace per product, two accounts racing for one
+  scan, the ledger flow with its event, two tabs racing to decide, saved
+  scans surviving the purge). Each file uses its own throwaway
   database. Run locally with
   `TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres DATABASE_SSL=disable npm run test:db --workspace=web`.
 
@@ -385,6 +423,11 @@ expected to be clean.
 | A new packet for trace-enriched analysis | The public-scan packet stays a faithful record of the public scan; lineage links the two. |
 | Deterministic trace adapter, no LLM summarization | Every A* number is reproducible from Token Profiler's data. |
 | `notEvaluable` instead of silence | An unevaluated check must not read as "no problem found". |
+| Supabase Auth, GitHub sign-in only | "Standard infrastructure" (PRD §9) on the Supabase project already in use; GitHub is the PRD's first repository provider. Email needs a custom SMTP provider (Supabase's default only reaches the project team, 2/hour). |
+| `getClaims()` on the server, never `getSession()` | Verifies the token's signature on each call (Supabase guidance). Next's control-flow errors are rethrown so pages that read the session are never prerendered as signed out. |
+| Claim token to save a report | A public report link must not let anyone take ownership; only the browser that ran the scan holds the token, and only its hash is stored. |
+| Ledger rules shared in `@gauntlet/core` | The CLI and the web app can't disagree about what a valid transition is. |
+| Accounts optional at runtime | Without the Supabase variables the app behaves exactly as before; a misconfiguration can't take scans down. |
 | Package fields the card already settled are copied, not regenerated | The brief can't drift from the reviewed experiment; the model only writes what the card doesn't have. |
 | No file names until a repository is connected | A brief written from the public site that names files would be invented; path-like components are rejected. |
 | Prompt and Markdown rendered by templates | They always match the validated package. Answers PRD §18: package and coding-agent prompt. |
@@ -418,11 +461,11 @@ expected to be clean.
 6. **300 s function limit** (Vercel Hobby): a run that needs both
    corrective retries could approach it; move to Pro (800 s) only if a real
    run shows it.
-7. **Signup is a placeholder**: it only carries the scan and card ids. The
-   brief's "Connect your repository" link goes through it.
+7. **Accounts are GitHub-only** and quotas are still per IP, not per
+   account. A report can only be saved from the browser that ran it
+   (scans created before accounts existed can't be saved).
 8. **Briefs are public-site only**: until GitHub deep scan (#4), packages
-   name parts of the product, not files, and can't know the stack. The web
-   ledger has no way to record results yet (needs accounts); the CLI does.
+   name parts of the product, not files, and can't know the stack.
 9. **Token Profiler coverage**: AI evidence covers only the chosen
    connectors and window, and at most 500 sessions. Token Profiler has no
    date filter, so every session of a connector is listed and filtered
@@ -438,6 +481,6 @@ expected to be clean.
    signup-equivalent ≥20%, false confidence <10%).
 2. Resolve the PRD §18 questions the validation raises, starting with
    supported product categories (data retention is decided; see §7).
-3. If the thresholds are met: authentication (so web visitors can record
-   ledger results and decisions), then Build Order #4 (GitHub deep scan,
-   which turns briefs repo-aware) and #6 (first production data adapter).
+3. If the thresholds are met: Build Order #4 (GitHub deep scan: connect a
+   repository to a workspace and make briefs repo-aware), then #6 (first
+   production data adapter).

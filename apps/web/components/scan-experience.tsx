@@ -21,6 +21,7 @@ import { AnimatePresence, LayoutGroup, MotionConfig, motion } from "framer-motio
 import { StatusTracker, useSteppedStage } from "@/components/status-tracker";
 import { ActivityLine } from "@/components/activity-line";
 import { ScanReport } from "@/components/scan-report";
+import { storeClaimToken } from "@/lib/claim-storage";
 import {
   activityLines,
   displayUrl,
@@ -98,7 +99,8 @@ export function ScanExperience(): React.JSX.Element {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error ?? `Request failed (${res.status}).`);
       }
-      const { id } = (await res.json()) as { id: string };
+      const { id, claimToken } = (await res.json()) as { id: string; claimToken?: string };
+      if (claimToken) storeClaimToken(id, claimToken);
       setSubmission({ url, id });
       window.history.pushState(null, "", `/scans/${id}`);
     } catch (err) {

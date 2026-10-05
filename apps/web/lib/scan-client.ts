@@ -23,12 +23,7 @@ export interface ScanJobResponse {
   progress?: ScanProgress | null;
 }
 
-const JOB_PATH = /^\/scans\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
-
-/** "/scans/<uuid>" -> "<uuid>"; anything else -> null. The URL is the source of truth for which scan is shown. */
-export function jobIdFromPath(pathname: string | null): string | null {
-  return pathname?.match(JOB_PATH)?.[1] ?? null;
-}
+export { jobIdFromPath } from "./scan-paths";
 
 export const POLL_INTERVAL_MS = 2500;
 

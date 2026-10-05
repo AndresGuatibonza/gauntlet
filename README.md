@@ -297,6 +297,46 @@ root -- npm workspaces fan them out to every package that defines them.)
   with `sk-ant-api03-` and is over 100 characters; a short `apikey_...`-
   style token is from a different system and will get a 401 here.
 
+#### Accounts: sign in with GitHub (web app)
+
+Optional; without the two `NEXT_PUBLIC_SUPABASE_*` variables the app runs
+without accounts, exactly as before. With them:
+
+- **Sign in** (`/signup`, header) uses Supabase Auth with GitHub only
+  (OAuth + PKCE; session in cookies, refreshed by `middleware.ts`; the
+  server trusts only `getClaims()`, which verifies the token). Gauntlet
+  asks for the public profile only, never repository access. Email sign-in
+  is deliberately off: Supabase's built-in email service only delivers to
+  the project's team (2 emails/hour), so it needs a custom SMTP provider
+  first.
+- **Saving a report**: `POST /api/scans` returns a claim token once (only
+  its SHA-256 is stored). The browser that ran the scan keeps it; after
+  sign-in, opening the report saves it to the user's workspace for that
+  product (one per product per account). Someone who was only sent the
+  link can read the report but can't save it. Saved scans are exempt from
+  the retention purge.
+- **Tracking experiments**: under a brief, the owner marks the experiment
+  running, records the decision (ship / iterate / discard) with its
+  result, and later an outcome -- the same rules as `gauntlet ledger
+  record` (shared in `@gauntlet/core`). `/ledger` lists every experiment
+  from the user's saved reports.
+
+One-time setup:
+
+1. GitHub -> Settings -> Developer settings -> OAuth Apps -> New OAuth App:
+   Homepage URL = your app URL; Authorization callback URL =
+   `https://<project-ref>.supabase.co/auth/v1/callback`. Copy the Client ID
+   and generate a Client secret.
+2. Supabase -> Authentication -> Sign In / Providers: enable **GitHub**
+   with that Client ID and secret. Disable **Email** (see above).
+3. Supabase -> Authentication -> URL Configuration: Site URL = your app
+   URL; add `https://<your-app>/auth/callback` and
+   `http://localhost:3000/auth/callback` to Redirect URLs.
+4. Vercel (and `apps/web/.env.local`): `NEXT_PUBLIC_SUPABASE_URL` and
+   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (Project Settings -> API Keys).
+5. `npm run migrate --workspace=web` (migration `007_accounts.sql`) before
+   deploying.
+
 #### "Build this" briefs and the Experiment Ledger (CLI)
 
 ```
@@ -502,7 +542,7 @@ that needs a new migration.**
 `apps/web/vercel.json` schedules `GET /api/cron/maintenance` daily at
 07:17 UTC. It fails scans stuck in flight for more than 10 minutes, clears
 client IP hashes older than 48 h, and deletes scans (with their events)
-older than `SCAN_RETENTION_DAYS` (default 180, minimum 30). Vercel sends
+older than `SCAN_RETENTION_DAYS` (default 180, minimum 30) -- anonymous scans only; scans saved to a workspace are kept. Vercel sends
 `CRON_SECRET` as a bearer token; without it the endpoint refuses every
 call. To run it by hand:
 `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/cron/maintenance`.
