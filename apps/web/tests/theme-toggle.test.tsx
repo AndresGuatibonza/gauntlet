@@ -35,8 +35,8 @@ afterEach(() => {
 });
 
 describe("ThemeToggle", () => {
-  it("starts from the OS theme when there is no stored choice", () => {
-    installMatchMedia(false);
+  it("starts light when there is no stored choice, even on a dark OS", () => {
+    installMatchMedia(true);
     const { getByRole } = render(<ThemeToggle />);
     const toggle = getByRole("switch", { name: "Dark mode" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -45,37 +45,35 @@ describe("ThemeToggle", () => {
   });
 
   it("switches theme on click, sets data-theme and remembers the choice", () => {
-    installMatchMedia(true);
     const { getByRole } = render(<ThemeToggle />);
     const toggle = getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     expect(toggle.getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(toggle);
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-
-    fireEvent.click(toggle);
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-    expect(readStoredTheme()).toBe("dark");
+    expect(readStoredTheme()).toBe("light");
   });
 
-  it("follows OS changes until the visitor makes an explicit choice", () => {
-    const os = installMatchMedia(true);
+  it("shows a stored dark choice (applied before paint) as on", () => {
+    document.documentElement.setAttribute("data-theme", "dark");
     const { getByRole } = render(<ThemeToggle />);
-    const toggle = getByRole("switch");
+    expect(getByRole("switch").getAttribute("aria-checked")).toBe("true");
+  });
 
-    act(() => os.setDark(false));
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-
-    fireEvent.click(toggle); // explicit: dark
-    act(() => os.setDark(false));
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  it("ignores OS changes", () => {
+    const os = installMatchMedia(false);
+    const { getByRole } = render(<ThemeToggle />);
+    act(() => os.setDark(true));
+    expect(getByRole("switch").getAttribute("aria-checked")).toBe("false");
+    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   });
 
   it("still switches when storage is blocked", () => {
-    installMatchMedia(true);
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("blocked");
     });
@@ -84,7 +82,7 @@ describe("ThemeToggle", () => {
     });
     const { getByRole } = render(<ThemeToggle />);
     expect(() => fireEvent.click(getByRole("switch"))).not.toThrow();
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(readStoredTheme()).toBeNull();
   });
 });
@@ -93,12 +91,12 @@ describe("THEME_BOOT_SCRIPT", () => {
   const boot = (): void => new Function(THEME_BOOT_SCRIPT)();
 
   it("applies a stored choice before React renders", () => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+    window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
     boot();
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 
-  it("leaves the OS in charge when nothing (or garbage) is stored", () => {
+  it("leaves the default (light) when nothing (or garbage) is stored", () => {
     boot();
     expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
     window.localStorage.setItem(THEME_STORAGE_KEY, "purple");

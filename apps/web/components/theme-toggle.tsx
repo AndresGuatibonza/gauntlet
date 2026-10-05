@@ -3,17 +3,14 @@
 /**
  * Light/dark switch for the site header.
  *
- * Three states, matching the token blocks in app/globals.css:
- *   - no stored choice: <html> has no data-theme and the CSS follows the
- *     OS (prefers-color-scheme); the switch mirrors the OS and keeps
- *     following it if the OS setting changes;
- *   - after a click: data-theme="light" | "dark" is set on <html> and the
- *     choice is stored, so it survives reloads.
- * The stored choice is applied before first paint by THEME_BOOT_SCRIPT
- * (inlined in app/layout.tsx), so a returning visitor never sees a flash
- * of the other theme. Until it has read the real theme after mount, the
- * switch renders its track without a thumb, so server and client markup
- * match and nothing jumps.
+ * Light is the default for everyone (whatever the OS prefers). Clicking sets
+ * data-theme="light" | "dark" on <html> -- matching the token blocks in
+ * app/globals.css -- and stores the choice, so it survives reloads. The
+ * stored choice is applied before first paint by THEME_BOOT_SCRIPT (inlined
+ * in app/layout.tsx), so a returning visitor never sees a flash of the
+ * other theme. Until it has read the real theme after mount, the switch
+ * renders its track without a thumb, so server and client markup match and
+ * nothing jumps.
  *
  * Storage can be unavailable (private windows, blocked site data): every
  * access is wrapped, and the switch still works for the current page view.
@@ -44,16 +41,9 @@ function storeTheme(theme: Theme): void {
   }
 }
 
-const DARK_QUERY = "(prefers-color-scheme: dark)";
-
-function systemTheme(): Theme {
-  return typeof window.matchMedia === "function" && !window.matchMedia(DARK_QUERY).matches ? "light" : "dark";
-}
-
-/** The theme actually on screen: an explicit choice on <html>, else the OS's. */
+/** The theme on screen: dark only when chosen, light otherwise. */
 export function currentTheme(): Theme {
-  const attr = document.documentElement.getAttribute("data-theme");
-  return attr === "light" || attr === "dark" ? attr : systemTheme();
+  return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
 }
 
 export function ThemeToggle(): React.JSX.Element {
@@ -61,13 +51,6 @@ export function ThemeToggle(): React.JSX.Element {
 
   useEffect(() => {
     setTheme(currentTheme());
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia(DARK_QUERY);
-    const followSystem = (): void => {
-      if (!document.documentElement.hasAttribute("data-theme")) setTheme(media.matches ? "dark" : "light");
-    };
-    media.addEventListener("change", followSystem);
-    return () => media.removeEventListener("change", followSystem);
   }, []);
 
   function toggle(): void {

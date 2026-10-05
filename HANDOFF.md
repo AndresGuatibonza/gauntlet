@@ -78,7 +78,9 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `app/auth/callback/route.ts`, `app/auth/signout/route.ts` | OAuth code exchange (+ `signup_completed`), sign-out (POST only). |
 | `app/api/scans/[id]/claim`, `.../viewer`, `.../cards/[index]/experiment` | Save a scan to the workspace (claim token), what the viewer may do, owner-only ledger updates. |
 | `lib/accounts.ts`, `lib/claim-storage.ts`, `lib/use-viewer.ts` | Claim tokens and canonical product URLs; the browser's copy of the token; viewer state and the automatic save after sign-in. |
-| `components/experiment-tracker.tsx`, `app/ledger/page.tsx`, `components/account-nav.tsx` | Ledger tracking under a brief, the user's experiments, header account links. |
+| `components/experiment-tracker.tsx`, `app/ledger/page.tsx` | Ledger tracking under a brief; the user's experiments. |
+| `app/reports/page.tsx`, `components/saved-reports.tsx` | The user's saved reports. |
+| `components/account-nav.tsx`, `components/site-nav.tsx` | Header navigation: the server part reads the session, the client part renders the links (current area marked) and the narrow-screen menu. |
 | `lib/github-app.ts`, `lib/github-state.ts` | The GitHub App: config, App JWT (RS256), one-repository read-only installation tokens, the OAuth code exchange and listing what the user can read; the httpOnly state cookie for the connection round trip. |
 | `app/api/github/connect`, `app/api/github/callback` | Start the connection from a report (install or authorize, `github_connect_started`) and finish it (verify state, store what the user can read, `github_connected`). |
 | `app/api/scans/[id]/repository`, `.../cards/[index]/repo-brief` | Owner-only: connect/disconnect the workspace's repository; start and poll the repo-aware brief for a card. |
@@ -384,12 +386,19 @@ intent, `wrong` ratings as a proxy for false confidence).
   the full experiment (control, variant, audience, primary metric,
   guardrails, stopping rule). The PRD also lists "assumptions"; the
   contract has no such field, so it is not shown.
-- **Themes**: every color is a CSS token defined for a dark and a light
-  palette. With no choice stored the page follows the OS
-  (`prefers-color-scheme`); the header switch sets `data-theme` on
-  `<html>` and stores it in `localStorage`. A small inline script applies
-  the stored choice before first paint, so there is no flash of the wrong
-  theme. Storage failures are tolerated.
+- **Themes**: every color is a CSS token defined for a light and a dark
+  palette. Light is the default for everyone, whatever the OS prefers; the
+  header switch sets `data-theme` on `<html>` and stores it in
+  `localStorage`. A small inline script applies the stored choice before
+  first paint, so there is no flash of the wrong theme. Storage failures
+  are tolerated.
+- **Navigation**: the header links every area so nothing needs Back: New
+  scan, Reports (`/reports`, saved reports) and Experiments (`/ledger`)
+  for signed-in users, and Sign in / Sign out. The current area is marked;
+  under 720px the links fold into a "Menu" panel (closes on navigation,
+  Escape or a click outside).
+- **Layout**: one centered column of 1040px (`--page-width`); on screens
+  of 900px and up a brief's sections flow into two columns.
 - Fonts: Fraunces (display) and Inter (body), loaded with a plain
   `<link>` rather than `next/font`, so builds do not fetch fonts through
   Node on TLS-intercepting networks.

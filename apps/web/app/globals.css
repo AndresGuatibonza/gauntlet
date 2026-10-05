@@ -1,69 +1,22 @@
 /**
  * Gauntlet design system -- editorial-minimalist, two themes.
  *
- * Layout: one 720px reading column; a slim header with the wordmark and
- * the theme switch; each Opportunity Card is a raised surface so the
+ * Layout: one centered column of --page-width (prose inside stays at a
+ * readable measure); a slim header with the wordmark, the site navigation
+ * and the theme switch; each Opportunity Card is a raised surface so the
  * report reads as a stack of distinct findings, not one long page.
  *
- * Themes (three states, per the standard pattern):
- *   - bare :root = dark "graphite" (the original, dark-first design);
- *   - no explicit choice -> follows the OS via prefers-color-scheme;
- *   - data-theme="light" | "dark" on <html> = the visitor's explicit choice
- *     from the header switch (components/theme-toggle.tsx), applied before
- *     first paint by the inline script in app/layout.tsx.
+ * Themes (two states):
+ *   - bare :root = light, the default for everyone whatever the OS says;
+ *   - data-theme="dark" on <html> = the visitor chose the dark "graphite"
+ *     palette with the header switch (components/theme-toggle.tsx); the
+ *     choice is stored and applied before first paint by the inline script
+ *     in app/layout.tsx.
  * Every color is a token; components never use a literal color, so both
  * themes stay consistent. Neutrals carry a slight cool bias so the warm
  * gold accent reads as deliberate rather than pure black/white.
  */
 :root {
-  --bg: #121417;
-  --bg-glow: rgba(220, 170, 82, 0.07);
-  --surface: #191c20;
-  --surface-2: #20242a;
-  --ink: #eceae4;
-  --ink-dim: #a9aba8;
-  --ink-faint: #858a8e;
-  --rule: rgba(236, 234, 228, 0.08);
-  --rule-strong: rgba(236, 234, 228, 0.18);
-  --accent: #dcaa52;
-  --accent-soft: rgba(220, 170, 82, 0.14);
-  --accent-line: rgba(220, 170, 82, 0.38);
-  --accent-ink: #1b1405;
-  --danger: #ef7a6b;
-  --good: #7cc79a;
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -24px rgba(0, 0, 0, 0.7);
-
-  --serif: "Fraunces", "Iowan Old Style", ui-serif, Georgia, serif;
-  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --radius: 14px;
-  --radius-sm: 10px;
-
-  color-scheme: dark;
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f3f4f2;
-    --bg-glow: rgba(173, 122, 26, 0.08);
-    --surface: #ffffff;
-    --surface-2: #eef0ed;
-    --ink: #1a1d20;
-    --ink-dim: #4b5055;
-    --ink-faint: #6a6f74;
-    --rule: rgba(26, 29, 32, 0.09);
-    --rule-strong: rgba(26, 29, 32, 0.2);
-    --accent: #8f6310;
-    --accent-soft: rgba(173, 122, 26, 0.12);
-    --accent-line: rgba(143, 99, 16, 0.35);
-    --accent-ink: #fffaf0;
-    --danger: #b33a2c;
-    --good: #2f7d4f;
-    --shadow: 0 1px 2px rgba(20, 24, 28, 0.05), 0 14px 32px -20px rgba(20, 24, 28, 0.22);
-    color-scheme: light;
-  }
-}
-
-:root[data-theme="light"] {
   --bg: #f3f4f2;
   --bg-glow: rgba(173, 122, 26, 0.08);
   --surface: #ffffff;
@@ -81,6 +34,32 @@
   --good: #2f7d4f;
   --shadow: 0 1px 2px rgba(20, 24, 28, 0.05), 0 14px 32px -20px rgba(20, 24, 28, 0.22);
   color-scheme: light;
+
+  --serif: "Fraunces", "Iowan Old Style", ui-serif, Georgia, serif;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --page-width: 1040px;
+}
+
+:root[data-theme="dark"] {
+  --bg: #121417;
+  --bg-glow: rgba(220, 170, 82, 0.07);
+  --surface: #191c20;
+  --surface-2: #20242a;
+  --ink: #eceae4;
+  --ink-dim: #a9aba8;
+  --ink-faint: #858a8e;
+  --rule: rgba(236, 234, 228, 0.08);
+  --rule-strong: rgba(236, 234, 228, 0.18);
+  --accent: #dcaa52;
+  --accent-soft: rgba(220, 170, 82, 0.14);
+  --accent-line: rgba(220, 170, 82, 0.38);
+  --accent-ink: #1b1405;
+  --danger: #ef7a6b;
+  --good: #7cc79a;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -24px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
 }
 
 * {
@@ -108,7 +87,7 @@ body {
 }
 
 .site-header {
-  max-width: 720px;
+  max-width: var(--page-width);
   margin: 0 auto;
   padding: 20px 24px 0;
   display: flex;
@@ -127,7 +106,7 @@ body {
 }
 
 main {
-  max-width: 720px;
+  max-width: var(--page-width);
   margin: 0 auto;
   padding: 48px 24px 120px;
 }
@@ -1272,4 +1251,123 @@ button.link-button:hover:not(:disabled) {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   white-space: pre;
+}
+
+/* Site navigation (components/site-nav.tsx): inline on wide screens, a
+   "Menu" panel on narrow ones. */
+.site-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.site-nav-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.site-nav-link {
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  text-decoration: none;
+  border-radius: 999px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.site-nav-link:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.site-nav-link[aria-current="page"] {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.site-nav-account {
+  margin: 0 0 0 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--rule-strong);
+}
+
+.site-nav-account button.account-signout {
+  font-size: 14px;
+}
+
+a.site-nav-account {
+  border-radius: 0;
+}
+
+button.site-nav-toggle {
+  display: none;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+}
+
+button.site-nav-toggle:hover:not(:disabled) {
+  transform: none;
+  border-color: var(--accent-line);
+}
+
+.site-nav-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+
+.site-nav-menu .site-nav-link {
+  border-radius: 8px;
+}
+
+.site-nav-menu .site-nav-account {
+  margin: 6px 0 0;
+  padding: 8px 12px 2px;
+  border-left: none;
+  border-top: 1px solid var(--rule);
+}
+
+@media (max-width: 720px) {
+  .site-nav-inline {
+    display: none;
+  }
+  button.site-nav-toggle {
+    display: inline-block;
+  }
+}
+
+/* Wide screens: a brief's sections flow into two columns so the extra
+   width shortens the page instead of leaving an empty right half. A label
+   always stays with its content. */
+@media (min-width: 900px) {
+  .package-sections {
+    columns: 2;
+    column-gap: 44px;
+  }
+  .package-sections dt {
+    break-after: avoid;
+  }
+  .package-sections dd {
+    break-inside: avoid;
+  }
+  .package-sections dt:first-child {
+    margin-top: 0;
+  }
 }
