@@ -38,6 +38,12 @@ export const SCAN_EVENT_TYPES = [
   "signup_started",
   "signup_completed",
   "experiment_decision_recorded",
+  // Migration 008, PRD §11: GitHub connection started from a report and
+  // completed (server, /api/github/*), and a repo-aware brief generated for
+  // a card (server).
+  "github_connect_started",
+  "github_connected",
+  "repo_brief_generated",
 ] as const;
 export type ScanEventType = (typeof SCAN_EVENT_TYPES)[number];
 

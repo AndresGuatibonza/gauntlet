@@ -79,6 +79,20 @@ export function readPackageLimits(env: Env = process.env): ScanLimits {
   };
 }
 
+/**
+ * Repo-aware briefs (GitHub deep scan): two or three Claude calls and a
+ * repository read each, only for signed-in owners of a saved report, so
+ * the allowance is per account (REPO_BRIEF_LIMIT_*).
+ */
+export const DEFAULT_REPO_BRIEF_LIMITS = { perClient: 10, global: 60 } as const;
+
+export function readRepoBriefLimits(env: Env = process.env): ScanLimits {
+  return {
+    perClient: parseLimit(env, "REPO_BRIEF_LIMIT_PER_USER_PER_DAY", DEFAULT_REPO_BRIEF_LIMITS.perClient),
+    global: parseLimit(env, "REPO_BRIEF_LIMIT_GLOBAL_PER_DAY", DEFAULT_REPO_BRIEF_LIMITS.global),
+  };
+}
+
 /** Minimum secret length; anything shorter is almost certainly a placeholder. */
 const MIN_SECRET_LENGTH = 16;
 

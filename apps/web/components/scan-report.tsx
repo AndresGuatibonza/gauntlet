@@ -17,6 +17,32 @@ import type { ScanJobResponse } from "@/lib/scan-client";
 import { ActionPackagePanel, type PackageView } from "@/components/action-package-panel";
 import { ExperimentTracker } from "@/components/experiment-tracker";
 import { useViewer, type ClaimState, type Viewer } from "@/lib/use-viewer";
+import { useRepository } from "@/lib/use-repository";
+import { RepoConnection } from "@/components/repo-connection";
+
+/** What came back from the GitHub round trip (?github=...), in words. */
+const GITHUB_RETURN: Record<string, { text: string; error: boolean }> = {
+  connected: { text: "GitHub is connected. Choose this product's repository under a brief to write a repo-aware version.", error: false },
+  no_repos: { text: "The Gauntlet GitHub app can't read any repository for your account yet. Give it access to this product's repository on GitHub, then connect again.", error: true },
+  denied: { text: "The GitHub connection was cancelled.", error: true },
+  not_owner: { text: "Only the account that saved this report can connect a repository to it.", error: true },
+  unavailable: { text: "Connecting GitHub isn't available right now.", error: true },
+  error: { text: "Couldn't connect GitHub. Please try again.", error: true },
+};
+
+/** Reads ?github=... once, then removes it from the address bar. */
+function useGitHubReturn(): string | null {
+  const [value, setValue] = useState<string | null>(null);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const github = url.searchParams.get("github");
+    if (!github) return;
+    setValue(github in GITHUB_RETURN ? github : "error");
+    url.searchParams.delete("github");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  }, []);
+  return value;
+}
 
 const PACKAGE_POLL_MS = 3000;
 /** Generation runs inside one 300 s function; stop polling well after that. */
@@ -81,6 +107,8 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
   const pollTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const { viewer, hasToken, claimState, claimError } = useViewer(job.id);
   const signInHref = `/signup?from=${job.id}`;
+  const repo = useRepository(job.id, viewer?.isOwner === true);
+  const githubReturn = useGitHubReturn();
 
   useEffect(() => {
     const timers = pollTimers.current;
@@ -179,6 +207,7 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
           onRetry={() => void requestPackage(cardIndex)}
           connectRepoHref={`/signup?from=${job.id}&card=${cardIndex}`}
           tracking={trackingFor(cardIndex)}
+          repoSlot={viewer?.isOwner ? <RepoConnection scanId={job.id} cardIndex={cardIndex} repo={repo} /> : undefined}
         />
       ) : null,
     };
@@ -209,6 +238,11 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
           claimError={claimError}
           signInHref={signInHref}
         />
+        {githubReturn && (
+          <p className={`account-banner${GITHUB_RETURN[githubReturn]!.error ? " error" : ""}`} role={GITHUB_RETURN[githubReturn]!.error ? "alert" : "status"}>
+            {GITHUB_RETURN[githubReturn]!.text}
+          </p>
+        )}
       </FadeUp>
 
       <StaggerList className="card-stack">

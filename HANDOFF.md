@@ -10,8 +10,8 @@ is the detailed operational reference.
 
 ## 1. Scope implemented
 
-PRD Build Orders **#0–#3**, plus the pieces needed to run the concierge
-validation on real products:
+PRD Build Orders **#0–#5 and #7 (minimal)**, plus the pieces needed to run
+the concierge validation on real products:
 
 | Build Order | What it is | Where |
 |---|---|---|
@@ -24,9 +24,9 @@ validation on real products:
 | #5 "Build this" handoff (Amendment 2) | Implementation package per card: objective, approach, feature flag, acceptance criteria, measurement, rollback, risks, coding-agent prompt | `packages/core`, `apps/web`, `packages/cli` |
 | #7 Experiment Ledger, minimal (Amendment 2) | Every package starts a `planned` record; results and decisions recorded in the CLI and, for saved reports, in the web app | `packages/core`, `apps/web`, `packages/cli` |
 | Accounts (PRD §8.6, §17) | Sign in with GitHub (Supabase Auth), workspaces per product, saving a report with proof of authorship, `/ledger` | `apps/web` |
+| #4 GitHub deep scan (Amendment 3) | A read-only GitHub App connects a repository to a workspace; per card, a targeted read writes code evidence (C*), a refinement of the card and a repo-aware brief naming real files, private to the owner | `packages/core`, `apps/web` |
 
-Not started: GitHub deep scan (#4), production data adapters (#6). Until #4, packages are written from the public site only
-and name parts of the product, not files.
+Not started: production data adapters (#6), execution adapter / PR creation (#8).
 
 ## 2. Components
 
@@ -53,6 +53,9 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `llm-client.ts` | Anthropic SDK wrapper. Model `claude-sonnet-5`, `max_tokens` 16000 (the model spends part of the budget on thinking before the text block; 4096 truncated real responses). Honors `NODE_EXTRA_CA_CERTS` for TLS-intercepting networks. |
 | `scientist.ts` | First Claude call. Must return 3–5 cards, exactly one `build_this`, and cite only evidence ids that exist in the packet (E*, and A* when the packet carries AI evidence). Invalid output gets one corrective retry with the exact validation error. Cards are ranked by `rankScore`. |
 | `action-package.ts` | "Build this" (contract §2.2–§2.3). `generateActionPackage()`: one Claude call (+1 corrective retry) writes the engineering parts; the card's hypothesis, experiment and cited evidence are copied in verbatim; rejects evidence the card doesn't cite and file-path-like components. `renderCodingAgentPrompt()` / `renderActionPackageMarkdown()`: templates over the validated package. `planExperimentRecord()` and `ExperimentRecordSchema` (ledger rules). |
+| `repo-evidence.ts` | Contract §1.7. `RepoReader` (one repository at one commit), the code context schema (C* items pinned to a commit, line citations only in inspected files), `detectRepoSignals()` (no LLM: layout, languages, declared framework/AI/flag/analytics/test libraries, test files, CI/deployment, CODEOWNERS) and `candidatePaths()` (bounded list of readable source files). Strict `owner/name` validation. |
+| `repo-analysis.ts` | Contract §2.4. `analyzeRepositoryForCard()`: one Claude call picks ≤12 files for the card (unknown paths dropped), a second writes code evidence whose quote must appear in the cited lines (Gauntlet copies the lines) and the refinement (confidence, effort, files to change, experiment notes, contradictions, still missing). Corrective retry on any violation. |
+| `github-repo-reader.ts` | GitHub REST `RepoReader` with an issued token: commit SHA of the branch, recursive tree, raw files at that commit (size-bounded, binary dropped); typed errors (unauthorized, forbidden, not found, rate limited, failed). |
 | `reviewer.ts` | Second Claude call. Applies the contract's four-question checklist to each card: `pass`, `downgrade_confidence` (can only lower, and lowers the evidence-quality score with it) or `drop`. Re-ranks survivors and re-promotes the top one to `build_this` if the original was dropped. Fails if every card is dropped. One corrective retry. |
 
 **`apps/web`**
@@ -76,10 +79,14 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `app/api/scans/[id]/claim`, `.../viewer`, `.../cards/[index]/experiment` | Save a scan to the workspace (claim token), what the viewer may do, owner-only ledger updates. |
 | `lib/accounts.ts`, `lib/claim-storage.ts`, `lib/use-viewer.ts` | Claim tokens and canonical product URLs; the browser's copy of the token; viewer state and the automatic save after sign-in. |
 | `components/experiment-tracker.tsx`, `app/ledger/page.tsx`, `components/account-nav.tsx` | Ledger tracking under a brief, the user's experiments, header account links. |
+| `lib/github-app.ts`, `lib/github-state.ts` | The GitHub App: config, App JWT (RS256), one-repository read-only installation tokens, the OAuth code exchange and listing what the user can read; the httpOnly state cookie for the connection round trip. |
+| `app/api/github/connect`, `app/api/github/callback` | Start the connection from a report (install or authorize, `github_connect_started`) and finish it (verify state, store what the user can read, `github_connected`). |
+| `app/api/scans/[id]/repository`, `.../cards/[index]/repo-brief` | Owner-only: connect/disconnect the workspace's repository; start and poll the repo-aware brief for a card. |
+| `lib/repo-store.ts`, `lib/build-repo-brief.ts` | Data access for migration 008 (access lists, workspace repositories, repo briefs with their claim/quota/retry rules); the background job (token → read → analysis → package) and its user-facing error messages. |
+| `lib/use-repository.ts`, `components/repo-connection.tsx`, `components/repo-brief-panel.tsx` | The owner's repository connection under a brief, and the repo-aware brief view (what the code changes, code evidence, the rewritten brief). |
 | `components/activity-line.tsx` | The live "what it's doing now" line under the tracker. |
 | `lib/scan-client.ts` | Polling hook, job response type, stage phrases and the activity-line selection rule. |
 | `lib/progress.ts` | Serialized, best-effort progress writer used by the pipeline. |
-| `app/signup/page.tsx` | Placeholder that carries `?from=<job>` and `?card=<index>` for when real signup exists. |
 | `lib/run-scan.ts` | The pipeline for one job, run inside Next.js `after()` (the function keeps running after the HTTP response). |
 | `lib/store.ts`, `lib/db.ts` | Postgres access through Supabase's transaction pooler; TLS with Supabase's own CA embedded (`lib/supabase-ca.ts`). |
 | `lib/rate-limit.ts` | Scan quota logic and client IP hashing. |
@@ -240,6 +247,35 @@ limit is 300 s (`maxDuration` on the Hobby plan).
 5. Without `NEXT_PUBLIC_SUPABASE_*`, none of this appears and nothing else
    changes.
 
+### GitHub deep scan (repo-aware brief)
+
+1. **Connect.** Under a brief, the owner clicks "Connect GitHub"
+   (`/api/github/connect?scan=`): an httpOnly state cookie is set and the
+   owner installs the Gauntlet App on the repositories they choose
+   (Contents read-only), or, if it is already installed, only authorizes
+   it. GitHub returns to `/api/github/callback`: the state must match the
+   cookie; the OAuth code becomes the user's token, used once to list the
+   App's installations and the repositories *this user* can read (GitHub's
+   intersection), which replace any earlier list; the token is dropped.
+2. **Choose.** Back on the report, the owner picks the product's
+   repository from that list (`POST /api/scans/:id/repository`); one per
+   workspace. Switching repositories deletes the briefs written from the
+   previous one; disconnecting deletes the link and all of them.
+3. **Write.** "Write a repo-aware brief" (`POST .../repo-brief`) needs the
+   card's public brief first (so its ledger record exists). It is claimed
+   like packages (advisory lock, 10 per account and 60 in total per 24 h,
+   3 attempts, stuck after 10 minutes). In `after()`: an installation
+   token for that one repository (1 hour) → the default branch's current
+   commit → `analyzeRepositoryForCard` (two Claude calls) → the analysis is
+   stored (a retry reuses it) → `generateActionPackage` with the analysis
+   (codeContext `github`, may name only inspected files and cite C*) →
+   `repo_brief_generated`.
+4. **Read.** The owner sees what the code changes (revised confidence and
+   effort with their C* refs, files to change, experiment notes,
+   contradictions, still open), the code evidence with the cited lines,
+   and the rewritten brief with "Copy prompt" and download. Nothing of it
+   is in the public report or its API.
+
 ## 4. Data model (Postgres)
 
 Migrations live in `apps/web/lib/migrations/` and are applied with
@@ -301,6 +337,15 @@ URL, name; one per product per account); `scan_jobs.claim_token_hash`,
 ids stored without a foreign key into the `auth` schema, so the schema
 also runs on plain Postgres (CI).
 
+**`008_github.sql`**: `github_installations` and `github_repository_access`
+(per user, what they proved they can read at connection; replaced on each
+reconnection), `workspace_repositories` (one repository per workspace) and
+`repo_briefs` (per scan and card: status, stage reading/writing, analysis
+jsonb, package jsonb present exactly when ready and only with an analysis,
+attempts, requested_by for the per-account quota). Events
+`github_connect_started`, `github_connected` (report-level) and
+`repo_brief_generated` (card event). No GitHub token is stored anywhere.
+
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
 intent, `wrong` ratings as a proxy for false confidence).
@@ -317,6 +362,15 @@ intent, `wrong` ratings as a proxy for false confidence).
   for a finished report and an existing card, idempotent per client.
 - **Rendering**: evidence source links are rendered only for `http(s)`
   URLs, with `rel="noopener noreferrer nofollow"`.
+- **GitHub**: a GitHub App with Contents read-only on the repositories the
+  user selects. No token is stored: the user's token is used once at
+  connection; each deep scan mints a one-hour token restricted to one
+  repository. The connection round trip is bound to the browser by an
+  httpOnly state cookie; a repository can be connected only if the user
+  proved they can read it. Code evidence is owner-only and never part of
+  the shareable report or its API (PRD §8.6, §14); disconnecting deletes
+  it. Repository names are validated against GitHub's rules before any URL
+  is built.
 - **Secrets**: never committed; `.env*`, `*.pem` and `*.cer` are
   git-ignored. Configuration errors are logged server-side and returned to
   visitors as generic messages.
@@ -352,6 +406,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | no | Turn on accounts (Supabase Auth, GitHub). Public values; never the secret key. Setup steps in the README. |
 | `PACKAGE_LIMIT_PER_CLIENT_PER_DAY` | no | Default 5. Implementation briefs per client per 24 h. |
 | `PACKAGE_LIMIT_GLOBAL_PER_DAY` | no | Default 40. Implementation briefs in total per 24 h. |
+| `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY` | no | Turn on the GitHub deep scan (needs accounts). Server-only secrets. Setup in the README. |
+| `REPO_BRIEF_LIMIT_PER_USER_PER_DAY`, `REPO_BRIEF_LIMIT_GLOBAL_PER_DAY` | no | Defaults 10 and 60. Repo-aware briefs per account and in total per 24 h. |
 | `CRON_SECRET` | yes, for maintenance | Authorizes the daily maintenance endpoint; Vercel Cron sends it automatically. At least 16 characters. Without it the endpoint refuses every call. |
 | `SCAN_RETENTION_DAYS` | no | Default 180, minimum 30. Scans older than this are deleted with their events. |
 | `MIGRATION_DATABASE_URL` | no | Database for `npm run migrate`; defaults to `DATABASE_URL`. |
@@ -379,8 +435,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 275 tests:
-CLI 35, core 112, web 127), plus 31 database integration tests. `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 370 tests:
+CLI 35, core 152, web 181), plus 40 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -400,8 +456,17 @@ expected to be clean.
   line, report in place, refresh, Back/Forward, "Scan another", a failed
   scan, mobile width and reduced motion, in both themes.
 - `apps/web`: component tests with jsdom and Testing Library (status
-  tracker, cards and their actions, theme switch) and unit tests for the
-  quota and event validation.
+  tracker, cards and their actions, theme switch, repository connection
+  and repo-aware brief) and unit tests for the quota and event validation.
+- GitHub deep scan: deterministic signals on a sample monorepo (and on
+  this repository), candidate bounding, selection and analysis validation
+  (invented paths, misquoted lines, id sequence, unknown refs, uninspected
+  files), corrective retries, the GitHub reader against a fake API (every
+  HTTP failure, path encoding, size and binary limits, name validation),
+  the App JWT signature, token scoping, the OAuth exchange, pagination,
+  the state cookie, every route's authorization, and the owner flow in
+  Chromium against a production build (connect, pick, write, read) in both
+  themes and at mobile width.
 - Database integration tests (`apps/web/tests-db`, `npm run test:db`):
   the migration runner (fresh database, adopting a hand-migrated one with
   data, edited-file refusal, rollback of a failing file, concurrent
@@ -412,7 +477,11 @@ expected to be clean.
   and events written exactly once, constraints, cascades), and accounts
   (claim tokens, one workspace per product, two accounts racing for one
   scan, the ledger flow with its event, two tabs racing to decide, saved
-  scans surviving the purge). Each file uses its own throwaway
+  scans surviving the purge), and the GitHub deep scan (access replaced on
+  reconnection, connecting only readable repositories, briefs deleted on
+  switch and disconnect, concurrent claims starting one generation, retry
+  cap reusing the stored analysis, stuck briefs, per-account quota, the
+  ready-needs-analysis constraint, cascades). Each file uses its own throwaway
   database. Run locally with
   `TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres DATABASE_SSL=disable npm run test:db --workspace=web`.
 
@@ -438,7 +507,7 @@ expected to be clean.
 | Ledger rules shared in `@gauntlet/core` | The CLI and the web app can't disagree about what a valid transition is. |
 | Accounts optional at runtime | Without the Supabase variables the app behaves exactly as before; a misconfiguration can't take scans down. |
 | Package fields the card already settled are copied, not regenerated | The brief can't drift from the reviewed experiment; the model only writes what the card doesn't have. |
-| No file names until a repository is connected | A brief written from the public site that names files would be invented; path-like components are rejected. |
+| No file names until a repository is connected | A brief written from the public site that names files would be invented; path-like components are rejected. With a repository, only inspected files may be named. |
 | Prompt and Markdown rendered by templates | They always match the validated package. Answers PRD §18: package and coding-agent prompt. |
 | One package per card, claimed before the Claude call | Concurrent clicks and reloads never pay twice; separate package quota bounds cost. |
 | Ledger decisions in the CLI until accounts exist | Recording a decision needs an identity; anonymous web visitors only create `planned` records. |
@@ -446,6 +515,13 @@ expected to be clean.
 | Retention: IP hashes 48 h, scans 180 days | The quota only needs 24 h of IP hashes; 180 days covers a validation round and its follow-up. Closes PRD §18's retention question. |
 | Stuck scans failed by the polling endpoint, not only the cron | A visitor watching a killed scan gets an answer within one poll, not the next day. |
 | `DATABASE_SSL=disable` only for localhost | CI needs a plain local Postgres; refusing it for any other host means it can never turn TLS off against Supabase. |
+| GitHub App, not an OAuth `repo` scope | `repo` grants read and write to every repository; the App reads only Contents, only where installed, and is revoked by uninstalling (PRD §8.6). |
+| No stored GitHub tokens | The user's token proves access once; one-hour, one-repository installation tokens are minted per deep scan. Nothing to leak at rest. |
+| Targeted retrieval, at most 12 files per card | PRD §8.7 ("never require full-repo embedding/indexing"); bounded cost and context (PRD §14). |
+| Deterministic signals before the model | Stack, flag and analytics libraries and ownership are facts read from manifests, reproducible and always grounded. |
+| Gauntlet copies cited lines; the model only quotes | A citation is verified to exist in the file; the excerpt shown is the file's own text. |
+| Repo-aware brief is a second, private package | The public report stays shareable; the reviewed card and its ledger record are never rewritten (contract Amendment 3). |
+| Analysis stored before the package step | A retry after a failed package step doesn't re-read the repository or repeat two Claude calls (PRD §14 "resumable"). |
 | `@gauntlet/core` has no build step | Next.js transpiles it (`transpilePackages`); one source of truth for CLI and web. |
 
 ## 10. Known limitations and risks
@@ -473,8 +549,13 @@ expected to be clean.
 7. **Accounts are GitHub-only** and quotas are still per IP, not per
    account. A report can only be saved from the browser that ran it
    (scans created before accounts existed can't be saved).
-8. **Briefs are public-site only**: until GitHub deep scan (#4), packages
-   name parts of the product, not files, and can't know the stack.
+8. **GitHub deep scan scope**: GitHub only; the default branch at the time
+   of the request; at most 12 files (≤800 lines, ≤60 KB each) per card, so
+   code outside them is not seen; trees over GitHub's recursive limit are
+   partial (recorded). Declared dependencies are not proof of use on a
+   given path. Access lists are refreshed only on reconnection; access
+   removed on GitHub surfaces as a clear error at the next deep scan.
+   Not yet run against a real repository with the real App.
 9. **Token Profiler coverage**: AI evidence covers only the chosen
    connectors and window, and at most 500 sessions. Token Profiler has no
    date filter, so every session of a connector is listed and filtered
@@ -490,6 +571,5 @@ expected to be clean.
    signup-equivalent ≥20%, false confidence <10%).
 2. Resolve the PRD §18 questions the validation raises, starting with
    supported product categories (data retention is decided; see §7).
-3. If the thresholds are met: Build Order #4 (GitHub deep scan: connect a
-   repository to a workspace and make briefs repo-aware), then #6 (first
-   production data adapter).
+3. Build Order #6 (first production data adapter; PostHog by default), chosen
+   by what the concierge round shows (contract §6).

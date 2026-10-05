@@ -20,7 +20,13 @@ function statusLabel(e: LedgerEntry): string {
   return e.record.status === "decided" ? (DECISION[e.record.decision ?? ""] ?? "Decided") : (STATUS[e.record.status] ?? e.record.status);
 }
 
-export default async function LedgerPage(): Promise<React.JSX.Element> {
+export default async function LedgerPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}): Promise<React.JSX.Element> {
+  // Coming back from GitHub with an expired or foreign state (app/api/github/callback).
+  const githubExpired = (await searchParams)["github"] === "expired";
   if (!readAuthConfig()) redirect("/signup");
   const user = await getSessionUser();
   if (!user) redirect("/signup?next=/ledger");
@@ -39,6 +45,11 @@ export default async function LedgerPage(): Promise<React.JSX.Element> {
     <FadeUp>
       <h1 className="ledger-title">Your experiments</h1>
       <p className="lede">Every experiment started with &ldquo;Build this&rdquo; on a report you saved, and what came of it.</p>
+      {githubExpired && (
+        <p className="error" role="alert">
+          That GitHub connection link expired or didn&apos;t start here. Open the report and connect GitHub again.
+        </p>
+      )}
       {failed && <p className="error" role="alert">Couldn&apos;t load your experiments. Please reload the page.</p>}
       {!failed && entries.length === 0 && (
         <p className="muted" style={{ marginTop: 28 }}>

@@ -337,6 +337,58 @@ One-time setup:
 5. `npm run migrate --workspace=web` (migration `007_accounts.sql`) before
    deploying.
 
+#### GitHub deep scan: repo-aware briefs (web app)
+
+Optional; needs accounts (above) and the five `GITHUB_APP_*` variables.
+Without them the report keeps its "Connect your repository" link and
+nothing else changes. Contract: Amendment 3 (§1.7 code context, §2.4
+refinement).
+
+- **Connecting**: under a brief, the report's owner clicks "Connect
+  GitHub" -> installs the Gauntlet GitHub App on the repositories they
+  choose (read-only Contents) -> back on the report, picks the product's
+  repository. One repository per workspace (product). The user's GitHub
+  token is used once, at connection, to list the repositories *they* can
+  read; it is never stored. Each deep scan mints a one-hour token limited
+  to that one repository.
+- **Repo-aware brief** (per card, after "Build this"): Gauntlet reads the
+  default branch at its current commit -- deterministic signals (stack,
+  AI SDKs, flag/analytics/test libraries, CI/deployment, CODEOWNERS), then
+  at most 12 files chosen for that card -- and writes code evidence (each
+  item cites a file and line range whose text Gauntlet verified), a
+  refinement (revised confidence and effort, files to change, how to run
+  the experiment in this codebase, contradictions, what is still open) and
+  a rewritten brief that names only inspected files. Never a full-repo
+  index.
+- **Privacy**: all of it is visible only to the owner, stored apart from
+  the shareable report. Disconnecting deletes the link and every brief
+  written from it; uninstalling the App on GitHub revokes access entirely.
+
+One-time setup:
+
+1. GitHub -> Settings -> Developer settings -> GitHub Apps -> New GitHub
+   App (under the organization if the App should belong to it):
+   - Homepage URL: your app URL.
+   - Callback URL: `https://<your-app>/api/github/callback` (add
+     `http://localhost:3000/api/github/callback` for local work).
+   - Check "Request user authorization (OAuth) during installation".
+     Leave "Expire user authorization tokens" as is (the token is used
+     once).
+   - Webhook: uncheck "Active" (not used).
+   - Repository permissions: **Contents: Read-only** (Metadata read-only
+     is added automatically). Nothing else.
+   - Where can it be installed: "Any account" so design partners can
+     install it on their own organizations.
+2. On the App's page: note the App ID and the Client ID, generate a client
+   secret, and generate a private key (a `.pem` download). The URL name in
+   `https://github.com/apps/<slug>` is the slug.
+3. Vercel (Production and Preview, as **sensitive** variables; never
+   `NEXT_PUBLIC_`): `GITHUB_APP_ID`, `GITHUB_APP_SLUG`,
+   `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`,
+   `GITHUB_APP_PRIVATE_KEY` (the whole `.pem` content).
+4. `npm run migrate --workspace=web` (migration `008_github.sql`) before
+   deploying.
+
 #### "Build this" briefs and the Experiment Ledger (CLI)
 
 ```
@@ -609,9 +661,9 @@ select
    decision for Andres, not something to keep deferring indefinitely now
    that there's a working, publicly-hostable, end-to-end-validated report
    to actually show someone.
-2. Next PRD Build Order is #4 (GitHub deep-scan adapter), but per the
-   PRD's own sequencing rule it should follow real concierge validation
-   (item 1), not precede it.
+2. Build Order #4 (GitHub deep scan) is built (repo-aware briefs, above).
+   Next in the PRD is #6, the first production data adapter (PostHog by
+   default), which the concierge round should choose (contract §6).
 3. `npm audit` reports 7 advisories (as of 2026-09-28). Six are in
    dev-only tooling (vitest/vite/esbuild -- affect local dev/test
    servers, not the deployed app); one is Next via postcss (build-time

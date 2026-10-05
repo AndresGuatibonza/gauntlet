@@ -1110,3 +1110,166 @@ button.account-signout:hover:not(:disabled) {
     padding: 16px 14px;
   }
 }
+
+/* GitHub deep scan (components/repo-connection.tsx, repo-brief-panel.tsx) */
+.repo-connection {
+  margin-top: 12px;
+}
+
+.repo-note {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.repo-connected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.repo-connected code,
+.repo-note code,
+.repo-brief code,
+.code-evidence code {
+  font-size: 12px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+button.link-button {
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.link-button:hover:not(:disabled) {
+  transform: none;
+  color: var(--ink);
+}
+
+.repo-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+.repo-links a.muted {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.repo-picker label {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.repo-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.repo-picker select {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+}
+
+.repo-picker select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.repo-brief {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.repo-brief .activity-line {
+  margin: 0;
+}
+
+.repo-brief-start button {
+  margin-top: 4px;
+}
+
+.repo-brief-package {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+}
+
+.code-evidence {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.code-evidence summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.code-evidence ol {
+  margin: 10px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.code-evidence li p {
+  margin: 0;
+}
+
+.code-evidence-ref {
+  margin-top: 2px !important;
+}
+
+/* Grid items default to min-width: auto, which would let a long code line
+   widen the whole card; the excerpt scrolls inside its own box instead. */
+.card-stack > *,
+.code-evidence,
+.code-evidence li {
+  min-width: 0;
+}
+
+.code-excerpt {
+  max-width: 100%;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  max-height: 240px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  white-space: pre;
+}

@@ -23,13 +23,16 @@ describe("contract vocabulary", () => {
       "signup_started",
       "signup_completed",
       "experiment_decision_recorded",
+      "github_connect_started",
+      "github_connected",
+      "repo_brief_generated",
     ]);
     expect(CARD_RATINGS).toEqual(["obvious", "useful", "surprising", "wrong", "would_act_now"]);
   });
 });
 
 describe("ClientEventSchema", () => {
-  it.each(["action_package_generated", "experiment_created", "signup_completed", "experiment_decision_recorded"])("never accepts the server-only event %s from a browser", (type) => {
+  it.each(["action_package_generated", "experiment_created", "signup_completed", "experiment_decision_recorded", "github_connect_started", "github_connected", "repo_brief_generated"])("never accepts the server-only event %s from a browser", (type) => {
     expect(ClientEventSchema.safeParse({ type, cardIndex: 0 }).success).toBe(false);
   });
 

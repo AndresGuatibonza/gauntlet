@@ -27,12 +27,15 @@ export function ActionPackagePanel({
   onRetry,
   connectRepoHref,
   tracking,
+  repoSlot,
 }: {
   view: PackageView;
   onRetry: () => void;
   connectRepoHref: string;
   /** Experiment Ledger tracking, shown under a ready brief (scan-report.tsx decides what fits the viewer). */
   tracking?: React.ReactNode;
+  /** For the report's owner: the GitHub connection and repo-aware brief, in place of the "Connect your repository" link. */
+  repoSlot?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <motion.section
@@ -53,25 +56,49 @@ export function ActionPackagePanel({
           )}
         </div>
       )}
-      {view.status === "ready" && <PackageBody view={view} connectRepoHref={connectRepoHref} />}
+      {view.status === "ready" && (
+        <BriefDetails pkg={view.package} codingAgentPrompt={view.codingAgentPrompt} markdown={view.markdown} downloadPrefix="gauntlet-brief">
+          <div className="package-repo">
+            <p>
+              Written from the public website only, so it names parts of the product, not files. Connecting your repository
+              would pin down:
+            </p>
+            <ul>{view.package.missingContext.map((s) => <li key={s}>{s}</li>)}</ul>
+            {repoSlot ?? <a href={connectRepoHref}>Connect your repository</a>}
+          </div>
+        </BriefDetails>
+      )}
       {view.status === "ready" && tracking}
     </motion.section>
   );
 }
 
-function PackageBody({
-  view,
-  connectRepoHref,
+/**
+ * One implementation brief: copy/download actions and its sections. Shared
+ * by the public brief and the repo-aware one (repo-brief-panel.tsx); what
+ * follows the sections (repository context) is the caller's `children`.
+ */
+export function BriefDetails({
+  pkg,
+  codingAgentPrompt,
+  markdown,
+  downloadPrefix,
+  title = "Implementation brief",
+  children,
 }: {
-  view: Extract<PackageView, { status: "ready" }>;
-  connectRepoHref: string;
+  pkg: ActionPackage;
+  codingAgentPrompt: string;
+  markdown: string;
+  downloadPrefix: string;
+  title?: string;
+  children?: React.ReactNode;
 }): React.JSX.Element {
-  const pkg = view.package;
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
+  const componentsLabel = pkg.codeContext === "github" ? "Where to change it" : "Where in the product";
 
   async function copyPrompt(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(view.codingAgentPrompt);
+      await navigator.clipboard.writeText(codingAgentPrompt);
       setCopied("copied");
     } catch {
       setCopied("failed");
@@ -79,17 +106,17 @@ function PackageBody({
   }
 
   function download(): void {
-    const url = URL.createObjectURL(new Blob([view.markdown], { type: "text/markdown;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `gauntlet-brief-${pkg.featureFlag.name}.md`;
+    link.download = `${downloadPrefix}-${pkg.featureFlag.name}.md`;
     link.click();
     URL.revokeObjectURL(url);
   }
 
   return (
     <>
-      <h3 className="package-title">Implementation brief</h3>
+      <h3 className="package-title">{title}</h3>
       <p className="package-objective">{pkg.objective}</p>
 
       <div className="package-actions">
@@ -147,20 +174,13 @@ function PackageBody({
             ))}
           </ul>
         </dd>
-        <dt>Where in the product</dt>
+        <dt>{componentsLabel}</dt>
         <dd>
           <ul>{pkg.likelyComponents.map((s) => <li key={s}>{s}</li>)}</ul>
         </dd>
       </dl>
 
-      <div className="package-repo">
-        <p>
-          Written from the public website only, so it names parts of the product, not files. Connecting your repository
-          would pin down:
-        </p>
-        <ul>{pkg.missingContext.map((s) => <li key={s}>{s}</li>)}</ul>
-        <a href={connectRepoHref}>Connect your repository</a>
-      </div>
+      {children}
     </>
   );
 }
