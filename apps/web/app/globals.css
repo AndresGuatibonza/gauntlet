@@ -789,6 +789,23 @@ button.compact {
   margin: 0 0 8px;
 }
 
+.package-repo ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+.package-repo li + li {
+  margin-top: 4px;
+}
+
+.package-line {
+  margin: 0;
+}
+
+.package-line + .package-line {
+  margin-top: 4px;
+}
+
 .package-repo a {
   color: var(--accent);
   font-weight: 500;

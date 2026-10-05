@@ -121,7 +121,13 @@ function PackageBody({
         </dd>
         <dt>Measure</dt>
         <dd>
-          {pkg.measurement.howToMeasure} Baseline: {pkg.measurement.baseline} Run for at least {pkg.measurement.minimumDuration}.
+          <p className="package-line">{pkg.measurement.howToMeasure}</p>
+          <p className="package-line">
+            <span className="muted">Baseline:</span> {pkg.measurement.baseline}
+          </p>
+          <p className="package-line">
+            <span className="muted">Minimum duration:</span> {pkg.measurement.minimumDuration}
+          </p>
         </dd>
         <dt>Roll back if</dt>
         <dd>
@@ -150,8 +156,9 @@ function PackageBody({
       <div className="package-repo">
         <p>
           Written from the public website only, so it names parts of the product, not files. Connecting your repository
-          would pin down: {pkg.missingContext.join("; ")}.
+          would pin down:
         </p>
+        <ul>{pkg.missingContext.map((s) => <li key={s}>{s}</li>)}</ul>
         <a href={connectRepoHref}>Connect your repository</a>
       </div>
     </>

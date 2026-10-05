@@ -322,7 +322,7 @@ ${bullets(pkg.acceptanceCriteria)}
 ## Measurement
 ${pkg.measurement.howToMeasure}
 Baseline: ${pkg.measurement.baseline}
-Run for at least: ${pkg.measurement.minimumDuration}
+Minimum duration: ${pkg.measurement.minimumDuration}
 
 ## Roll back (turn the flag off) if
 ${bullets(pkg.rollbackCriteria)}
