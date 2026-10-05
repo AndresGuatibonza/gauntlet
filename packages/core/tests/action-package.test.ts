@@ -14,6 +14,8 @@ import {
 import { fakeLlmClient, LlmCallError } from "../src/llm-client.js";
 import type { OpportunityCard } from "../src/opportunity-card.js";
 import { fakeEvidencePacket, fakeOpportunityCard } from "./fixtures.js";
+import { sampleRepoAnalysis, SHA } from "./repo-fixtures.js";
+import type { RepoAnalysis } from "../src/repo-analysis.js";
 
 const card = fakeOpportunityCard({ evidenceRefs: ["E1", "E2"] }) as OpportunityCard;
 const packet = fakeEvidencePacket();
@@ -126,6 +128,83 @@ describe("generateActionPackage", () => {
     const extra = JSON.stringify({ ...draft(), surprise: true });
     const badFlag = JSON.stringify(draft({ featureFlag: { name: "Homepage CTA", rollout: "50%" } }));
     await expect(generateActionPackage(card, packet, fakeLlmClient([extra, badFlag]))).rejects.toThrow(/snake_case/);
+  });
+});
+
+describe("repo-aware package (codeContext github, Amendment 3)", () => {
+  const repo = sampleRepoAnalysis() as RepoAnalysis;
+  const repoDraft = (overrides: Partial<ActionPackageDraft> = {}) =>
+    draft({
+      likelyComponents: ["apps/web/app/page.tsx -- the hero CTA and the flagged price", "the shared pricing data shown on the pricing page"],
+      evidenceRefs: ["E1", "C2"],
+      ...overrides,
+    });
+
+  it("names inspected files, cites code evidence and records the repository", async () => {
+    let system = "";
+    let prompt = "";
+    const client = fakeLlmClient((o) => {
+      system = o.system;
+      prompt = o.messages[0]!.content;
+      return JSON.stringify(repoDraft());
+    });
+    const pkg = await generateActionPackage(card, packet, client, { now: () => NOW, repoAnalysis: repo });
+    expect(ActionPackageSchema.parse(pkg)).toEqual(pkg);
+    expect(pkg.codeContext).toBe("github");
+    expect(pkg.repository).toEqual({ name: "acme/web", ref: SHA, filesInspected: 3 });
+    expect(pkg.citedEvidence.map((e) => e.id)).toEqual(["E1", "E2", "C2"]);
+    expect(pkg.citedEvidence.at(-1)!.sourceRef).toBe(`github:acme/web@${SHA}:apps/web/app/page.tsx#L3-L10`);
+    expect(pkg.experiment).toEqual(card.experiment);
+    expect(system).toContain("only files from the inspected list");
+    expect(system).not.toContain("No code repository is connected");
+    expect(prompt).toContain("Inspected files (the only paths you may name):\napps/web/app/page.tsx");
+    expect(prompt).toContain('"implementationSurface"');
+  });
+
+  it("rejects a path that was not inspected and asks again with it named", async () => {
+    const bad = JSON.stringify(repoDraft({ likelyComponents: ["src/components/Hero.tsx -- the hero"] }));
+    const prompts: string[] = [];
+    const client = fakeLlmClient((o, i) => {
+      prompts.push(o.messages.at(-1)!.content);
+      return i === 0 ? bad : JSON.stringify(repoDraft());
+    });
+    const pkg = await generateActionPackage(card, packet, client, { repoAnalysis: repo });
+    expect(prompts[1]).toContain('not inspected: "src/components/Hero.tsx"');
+    expect(pkg.likelyComponents[0]).toContain("apps/web/app/page.tsx");
+  });
+
+  it("requires naming a file when the refinement found where to change it", () => {
+    const problems = checkDraftGrounding(repoDraft({ likelyComponents: ["the homepage hero"] }), card, repo);
+    expect(problems.join(" ")).toContain('must name the inspected files to change (e.g. "apps/web/app/page.tsx")');
+    const noSurface = { ...repo, refinement: { ...repo.refinement, implementationSurface: [] } };
+    expect(checkDraftGrounding(repoDraft({ likelyComponents: ["the homepage hero"] }), card, noSurface)).toEqual([]);
+  });
+
+  it("accepts directories of inspected files and unique file names, rejects unknown code ids", () => {
+    expect(checkDraftGrounding(repoDraft({ likelyComponents: ["apps/web/app/ -- the app routes", "page.tsx -- the hero"] }), card, repo)).toEqual([]);
+    expect(checkDraftGrounding(repoDraft({ evidenceRefs: ["C9"] }), card, repo).join(" ")).toContain("found C9");
+    // Without a repository, C ids are foreign and paths are forbidden as before.
+    expect(checkDraftGrounding(repoDraft(), card)).toHaveLength(2);
+  });
+
+  it("requires repository details exactly for github packages", async () => {
+    const pkg = await generateActionPackage(card, packet, fakeLlmClient([JSON.stringify(repoDraft())]), { now: () => NOW, repoAnalysis: repo });
+    expect(ActionPackageSchema.safeParse({ ...pkg, repository: undefined }).success).toBe(false);
+    const publicPkg = await generateActionPackage(card, packet, fakeLlmClient([JSON.stringify(draft())]), { now: () => NOW });
+    expect(publicPkg.repository).toBeUndefined();
+    expect(ActionPackageSchema.safeParse({ ...publicPkg, repository: pkg.repository }).success).toBe(false);
+  });
+
+  it("renders where to change it and which commit the plan was read at", async () => {
+    const pkg = await generateActionPackage(card, packet, fakeLlmClient([JSON.stringify(repoDraft())]), { now: () => NOW, repoAnalysis: repo });
+    const prompt = renderCodingAgentPrompt(pkg);
+    expect(prompt).toContain("## Where to change it");
+    expect(prompt).toContain("a targeted read of 3 file(s) of acme/web at commit aaaaaaa");
+    expect(prompt).not.toContain("no one has looked at this repository yet");
+    const md = renderActionPackageMarkdown(pkg);
+    expect(md).toContain("from the public website and 3 inspected file(s) of acme/web at aaaaaaa.");
+    expect(md).toContain("## Where to change it");
+    expect(md).toContain(`- C2: The homepage hero renders`);
   });
 });
 

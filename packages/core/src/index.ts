@@ -13,3 +13,6 @@ export * from "./scientist.js";
 export * from "./reviewer.js";
 export * from "./token-profiler-adapter.js";
 export * from "./action-package.js";
+export * from "./repo-evidence.js";
+export * from "./repo-analysis.js";
+export * from "./github-repo-reader.js";

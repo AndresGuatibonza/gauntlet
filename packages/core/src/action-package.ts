@@ -11,16 +11,20 @@
  *   control/variant/audience/metric/guardrails/stopping rule, cited
  *   evidence) is copied into the package verbatim. The model only writes
  *   the engineering parts the card doesn't have.
- * - No repository is connected yet, so the package must not name files or
- *   paths: components are described in product terms, and what a repo
- *   connection would add goes in missingContext. File-path-looking
- *   components are rejected.
- * - The package may only cite evidence its card cites.
+ * - Without a repository (codeContext "public_scan") the package must not
+ *   name files or paths: components are described in product terms, and
+ *   what a repo connection would add goes in missingContext. File-path-
+ *   looking components are rejected.
+ * - With a repository analysis (codeContext "github", Amendment 3; see
+ *   repo-analysis.ts) the package names the files that were inspected, and
+ *   only those; it may also cite that card's code evidence (C*).
+ * - The package may only cite evidence its card cites (plus C* items).
  * - The coding-agent prompt and the Markdown brief are rendered from the
  *   validated package by templates, so they can never drift from it.
  */
 import { z } from "zod";
 import type { EvidencePacket } from "./evidence-packet.js";
+import type { RepoAnalysis } from "./repo-analysis.js";
 import { isPopulatedAiEvidence } from "./evidence-packet.js";
 import { LlmCallError, type LlmClient, type LlmMessage } from "./llm-client.js";
 import { ExperimentSchema, ChangeSurfaceSchema, type OpportunityCard } from "./opportunity-card.js";
@@ -69,6 +73,13 @@ export const CitedEvidenceSchema = z.object({
 });
 export type CitedEvidence = z.infer<typeof CitedEvidenceSchema>;
 
+export const CodeContextKindSchema = z.enum(["public_scan", "github"]);
+export type CodeContextKind = z.infer<typeof CodeContextKindSchema>;
+
+export const PackageRepositorySchema = z
+  .object({ name: z.string(), ref: z.string(), filesInspected: z.number().int().min(1) })
+  .strict();
+
 export const ActionPackageSchema = ActionPackageDraftSchema.extend({
   version: z.literal(ACTION_PACKAGE_VERSION),
   generatedAt: z.string().datetime(),
@@ -80,9 +91,15 @@ export const ActionPackageSchema = ActionPackageDraftSchema.extend({
     missingEvidence: z.string(),
   }),
   experiment: ExperimentSchema,
-  /** What the package was grounded on. Only "public_scan" until GitHub deep scan (#4) exists. */
-  codeContext: z.literal("public_scan"),
+  /** What the package was grounded on: the public website, or also a targeted read of a repository (Amendment 3). */
+  codeContext: CodeContextKindSchema,
+  /** The repository read, present exactly when codeContext is "github". */
+  repository: PackageRepositorySchema.optional(),
   citedEvidence: z.array(CitedEvidenceSchema).min(1),
+}).superRefine((pkg, ctx) => {
+  if ((pkg.codeContext === "github") !== (pkg.repository !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["repository"], message: 'repository is required exactly when codeContext is "github"' });
+  }
 });
 export type ActionPackage = z.infer<typeof ActionPackageSchema>;
 
@@ -113,6 +130,23 @@ export function looksLikeCodePath(component: string): boolean {
   });
 }
 
+/** File paths a component names: code-path-looking words, or words equal to a known path. */
+function namedPaths(component: string, known: ReadonlySet<string>): string[] {
+  return component
+    .split(/\s+/)
+    .map((w) => w.replace(/^[("'`]+|[)"'`,.;:]+$/g, ""))
+    .filter((w) => w.length > 0 && (known.has(w) || looksLikeCodePath(w)));
+}
+
+/** A named path is grounded when it is an inspected file, a directory of one, or the unique file with that name. */
+function isInspectedPath(path: string, inspected: readonly string[]): boolean {
+  const p = path.replace(/^\.\//, "").replace(/\/+$/, "");
+  if (inspected.includes(p)) return true;
+  if (inspected.some((f) => f.startsWith(`${p}/`))) return true;
+  if (!p.includes("/")) return inspected.filter((f) => f.slice(f.lastIndexOf("/") + 1) === p).length === 1;
+  return false;
+}
+
 /** The card's own cited evidence, resolved against the packet (E* and A* items). */
 export function citedEvidenceFor(card: OpportunityCard, packet: EvidencePacket): CitedEvidence[] {
   const byId = new Map<string, CitedEvidence>();
@@ -127,12 +161,18 @@ export function citedEvidenceFor(card: OpportunityCard, packet: EvidencePacket):
   return card.evidenceRefs.map((id) => byId.get(id)).filter((e): e is CitedEvidence => e !== undefined);
 }
 
-const SYSTEM_PROMPT = `You are the "Build this" handoff component of Gauntlet. Given one Opportunity Card (a ranked, evidence-backed product experiment) and the evidence it cites, you write the engineering-ready parts of an implementation package for the product team.
+const PUBLIC_SCAN_RULES = `2. No code repository is connected. Never name files, directories, functions, classes or code paths, and never guess the tech stack. Describe "likelyComponents" in product terms (for example "the pricing page's plan comparison section", "the signup form"). Put what a repository connection would clarify in "missingContext".
+3. Every factual claim about the product must trace to the cited evidence. "evidenceRefs" may only contain ids from the card's evidenceRefs.`;
+
+const GITHUB_RULES = `2. The product's repository was read for this card: you get its code evidence (C* items), a refinement of the card, and the list of inspected files. Name concrete files in "likelyComponents" as "<full path> -- <its role in this change>", and only files from the inspected list (never invent or guess a path). Base the approach on the code evidence: use the feature-flag and analytics mechanisms the code already has when there are any. Put what the targeted read could not settle in "missingContext".
+3. Every factual claim about the product or the code must trace to the cited evidence. "evidenceRefs" may contain the card's evidenceRefs and the C* ids of the code evidence.`;
+
+function systemPrompt(mode: CodeContextKind): string {
+  return `You are the "Build this" handoff component of Gauntlet. Given one Opportunity Card (a ranked, evidence-backed product experiment) and the evidence it cites, you write the engineering-ready parts of an implementation package for the product team.
 
 Ground rules, non-negotiable:
 1. The card's hypothesis and experiment (control, variant, audience, primary metric, guardrails, stopping rule) are already decided and will be copied into the package verbatim. Implement exactly that experiment; do not redesign it, add variants, or change the metric.
-2. No code repository is connected. Never name files, directories, functions, classes or code paths, and never guess the tech stack. Describe "likelyComponents" in product terms (for example "the pricing page's plan comparison section", "the signup form"). Put what a repository connection would clarify in "missingContext".
-3. Every factual claim about the product must trace to the cited evidence. "evidenceRefs" may only contain ids from the card's evidenceRefs.
+${mode === "github" ? GITHUB_RULES : PUBLIC_SCAN_RULES}
 4. The change must be shippable behind a feature flag and reversible. "featureFlag.name" is snake_case.
 5. Acceptance criteria are concrete and checkable by a reviewer (observable behavior, not intentions). Rollback criteria are measurable conditions that trigger turning the flag off, consistent with the card's guardrails.
 6. Do not fabricate precision: no invented baselines, traffic numbers or effect sizes. If a baseline is unknown, say how to establish it.
@@ -143,7 +183,7 @@ Respond with ONLY a single JSON object, no markdown code fences, no prose before
 {
   "objective": string,
   "nonGoals": [string, ...],              // 1-6
-  "likelyComponents": [string, ...],      // 1-8, product terms only
+  "likelyComponents": [string, ...],      // 1-8, ${mode === "github" ? "inspected files with their role" : "product terms only"}
   "approach": [string, ...],              // 2-10 ordered steps
   "featureFlag": { "name": string, "rollout": string },
   "acceptanceCriteria": [string, ...],    // 3-10
@@ -151,12 +191,13 @@ Respond with ONLY a single JSON object, no markdown code fences, no prose before
   "rollbackCriteria": [string, ...],      // 1-6
   "risks": [{ "risk": string, "mitigation": string }, ...],  // 1-6
   "missingContext": [string, ...],        // 1-8
-  "evidenceRefs": [string, ...]           // subset of the card's evidenceRefs
+  "evidenceRefs": [string, ...]           // subset of the card's evidenceRefs${mode === "github" ? " plus C* ids" : ""}
 }`;
+}
 
-function buildUserPrompt(card: OpportunityCard, packet: EvidencePacket, cited: CitedEvidence[]): string {
+function buildUserPrompt(card: OpportunityCard, packet: EvidencePacket, cited: CitedEvidence[], repo?: RepoAnalysis): string {
   const { rankScore: _rank, ...cardForPrompt } = card;
-  return [
+  const lines = [
     `Product: ${packet.productIdentity.productName} (${packet.productIdentity.url}), category ${packet.productIdentity.category}.`,
     `Stated value proposition: ${packet.productIdentity.statedValueProposition}`,
     "",
@@ -165,9 +206,23 @@ function buildUserPrompt(card: OpportunityCard, packet: EvidencePacket, cited: C
     "",
     "Evidence the card cites:",
     JSON.stringify(cited, null, 2),
-    "",
-    "Write the implementation package now, following every ground rule exactly.",
-  ].join("\n");
+  ];
+  if (repo) {
+    const { source, items } = repo.codeContext;
+    lines.push(
+      "",
+      `Repository ${source.repository} at commit ${source.ref}. Inspected files (the only paths you may name):`,
+      source.filesInspected.join("\n"),
+      "",
+      "Code evidence:",
+      JSON.stringify(items.map(({ id, evidenceType, observation, sourceRef, rawExcerpt }) => ({ id, evidenceType, observation, sourceRef, rawExcerpt })), null, 2),
+      "",
+      "Refinement of the card from the code:",
+      JSON.stringify(repo.refinement, null, 2),
+    );
+  }
+  lines.push("", "Write the implementation package now, following every ground rule exactly.");
+  return lines.join("\n");
 }
 
 function extractJsonPayload(raw: string): string {
@@ -177,23 +232,38 @@ function extractJsonPayload(raw: string): string {
 }
 
 /** Contract checks that zod can't express: grounding and no invented code locations. */
-export function checkDraftGrounding(draft: ActionPackageDraft, card: OpportunityCard): string[] {
+export function checkDraftGrounding(draft: ActionPackageDraft, card: OpportunityCard, repo?: RepoAnalysis): string[] {
   const problems: string[] = [];
-  const allowed = new Set(card.evidenceRefs);
+  const codeIds = repo ? repo.codeContext.items.map((i) => i.id) : [];
+  const allowed = new Set([...card.evidenceRefs, ...codeIds]);
   const foreign = draft.evidenceRefs.filter((id) => !allowed.has(id));
   if (foreign.length > 0) {
-    problems.push(`evidenceRefs may only cite the card's evidence (${card.evidenceRefs.join(", ")}); found ${foreign.join(", ")}.`);
+    const scope = repo ? `the card's evidence (${card.evidenceRefs.join(", ")}) and its code evidence (C*)` : `the card's evidence (${card.evidenceRefs.join(", ")})`;
+    problems.push(`evidenceRefs may only cite ${scope}; found ${foreign.join(", ")}.`);
   }
-  const pathLike = draft.likelyComponents.filter(looksLikeCodePath);
-  if (pathLike.length > 0) {
-    problems.push(
-      `likelyComponents must be product terms, not files or code paths (no repository is connected): ${pathLike.map((c) => `"${c}"`).join(", ")}.`,
-    );
+  if (!repo) {
+    const pathLike = draft.likelyComponents.filter(looksLikeCodePath);
+    if (pathLike.length > 0) {
+      problems.push(
+        `likelyComponents must be product terms, not files or code paths (no repository is connected): ${pathLike.map((c) => `"${c}"`).join(", ")}.`,
+      );
+    }
+    return problems;
+  }
+  const inspected = repo.codeContext.source.filesInspected;
+  const known = new Set(inspected);
+  const invented = [...new Set(draft.likelyComponents.flatMap((c) => namedPaths(c, known)).filter((p) => !isInspectedPath(p, inspected)))];
+  if (invented.length > 0) {
+    problems.push(`likelyComponents may only name inspected files; not inspected: ${invented.map((p) => `"${p}"`).join(", ")}.`);
+  }
+  const namesAFile = draft.likelyComponents.some((c) => namedPaths(c, known).some((p) => isInspectedPath(p, inspected)));
+  if (repo.refinement.implementationSurface.length > 0 && !namesAFile) {
+    problems.push(`likelyComponents must name the inspected files to change (e.g. ${repo.refinement.implementationSurface.map((s) => `"${s.path}"`).slice(0, 3).join(", ")}), each with its role.`);
   }
   return problems;
 }
 
-function parseDraft(raw: string, card: OpportunityCard): { draft: ActionPackageDraft } | { error: string } {
+function parseDraft(raw: string, card: OpportunityCard, repo?: RepoAnalysis): { draft: ActionPackageDraft } | { error: string } {
   let json: unknown;
   try {
     json = JSON.parse(extractJsonPayload(raw));
@@ -204,7 +274,7 @@ function parseDraft(raw: string, card: OpportunityCard): { draft: ActionPackageD
   if (!parsed.success) {
     return { error: `Response did not match the implementation package contract: ${parsed.error.message}` };
   }
-  const problems = checkDraftGrounding(parsed.data, card);
+  const problems = checkDraftGrounding(parsed.data, card, repo);
   if (problems.length > 0) return { error: problems.join(" ") };
   return { draft: parsed.data };
 }
@@ -213,6 +283,8 @@ export interface GenerateActionPackageOptions {
   /** Total attempts (1 + corrective retries). Default 2, like the Scientist and Reviewer. */
   maxAttempts?: number;
   now?: () => string;
+  /** The card's repository analysis: makes this a repo-aware ("github") package (Amendment 3). */
+  repoAnalysis?: RepoAnalysis;
 }
 
 /**
@@ -230,21 +302,28 @@ export async function generateActionPackage(
   if (cited.length === 0) {
     throw new ActionPackageError("The card cites no evidence present in its Evidence Packet; refusing to write an ungrounded package.");
   }
-  const messages: LlmMessage[] = [{ role: "user", content: buildUserPrompt(card, packet, cited) }];
+  const repo = options.repoAnalysis;
+  const mode: CodeContextKind = repo ? "github" : "public_scan";
+  const messages: LlmMessage[] = [{ role: "user", content: buildUserPrompt(card, packet, cited, repo) }];
 
   let lastError = "";
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let raw: string;
     try {
-      raw = await llmClient.complete({ system: SYSTEM_PROMPT, messages, maxTokens: 8000 });
+      raw = await llmClient.complete({ system: systemPrompt(mode), messages, maxTokens: 8000 });
     } catch (err) {
       if (err instanceof LlmCallError) {
         throw new ActionPackageError(`Could not reach the Claude API (attempt ${attempt}/${maxAttempts}): ${err.message}`, err);
       }
       throw err;
     }
-    const outcome = parseDraft(raw, card);
+    const outcome = parseDraft(raw, card, repo);
     if ("draft" in outcome) {
+      const codeCited = repo
+        ? repo.codeContext.items
+            .filter((i) => outcome.draft.evidenceRefs.includes(i.id))
+            .map((i) => ({ id: i.id, observation: i.observation, sourceRef: i.sourceRef }))
+        : [];
       return ActionPackageSchema.parse({
         ...outcome.draft,
         version: ACTION_PACKAGE_VERSION,
@@ -257,8 +336,17 @@ export async function generateActionPackage(
           missingEvidence: card.missingEvidence,
         },
         experiment: card.experiment,
-        codeContext: "public_scan",
-        citedEvidence: cited,
+        codeContext: mode,
+        ...(repo
+          ? {
+              repository: {
+                name: repo.codeContext.source.repository,
+                ref: repo.codeContext.source.ref,
+                filesInspected: repo.codeContext.source.filesInspected.length,
+              },
+            }
+          : {}),
+        citedEvidence: [...cited, ...codeCited],
       });
     }
     lastError = outcome.error;
@@ -281,6 +369,23 @@ function numbered(items: readonly string[]): string {
   return items.map((i, n) => `${n + 1}. ${i}`).join("\n");
 }
 
+function shortRef(ref: string): string {
+  return ref.slice(0, 7);
+}
+
+function beforeYouChange(pkg: ActionPackage): string {
+  if (pkg.codeContext === "github" && pkg.repository) {
+    return `## Where to change it
+This plan was written from the product's public website and a targeted read of ${pkg.repository.filesInspected} file(s) of ${pkg.repository.name} at commit ${shortRef(pkg.repository.ref)}. Start from:
+${bullets(pkg.likelyComponents)}
+If the code has moved on since that commit, or works differently than this plan assumes, stop and report what you found instead of guessing.`;
+  }
+  return `## Before you change anything
+This plan was written from the product's public website only; no one has looked at this repository yet. First locate where these live in the code:
+${bullets(pkg.likelyComponents)}
+If you can't find them, or the codebase works differently than this plan assumes, stop and report what you found instead of guessing.`;
+}
+
 /**
  * A provider-neutral brief to paste into the team's coding agent (PRD
  * §8.8's "interim execution path"). Rendered from the package, so it
@@ -295,10 +400,7 @@ ${pkg.objective}
 
 Hypothesis being tested: ${pkg.card.hypothesis}
 
-## Before you change anything
-This plan was written from the product's public website only; no one has looked at this repository yet. First locate where these live in the code:
-${bullets(pkg.likelyComponents)}
-If you can't find them, or the codebase works differently than this plan assumes, stop and report what you found instead of guessing.
+${beforeYouChange(pkg)}
 
 ## The experiment (already decided -- do not redesign it)
 - Control: ${e.control}
@@ -335,7 +437,11 @@ export function renderActionPackageMarkdown(pkg: ActionPackage): string {
   const e = pkg.experiment;
   return `# Implementation brief: ${pkg.card.title}
 
-${pkg.product.name} (${pkg.product.url}) · generated ${pkg.generatedAt} by Gauntlet from the public website only (no repository connected).
+${pkg.product.name} (${pkg.product.url}) · generated ${pkg.generatedAt} by Gauntlet ${
+    pkg.codeContext === "github" && pkg.repository
+      ? `from the public website and ${pkg.repository.filesInspected} inspected file(s) of ${pkg.repository.name} at ${shortRef(pkg.repository.ref)}.`
+      : "from the public website only (no repository connected)."
+  }
 
 ## Objective
 ${pkg.objective}
@@ -345,7 +451,7 @@ ${pkg.objective}
 ## Non-goals
 ${bullets(pkg.nonGoals)}
 
-## Likely components
+## ${pkg.codeContext === "github" ? "Where to change it" : "Likely components"}
 ${bullets(pkg.likelyComponents)}
 
 ## Proposed approach
