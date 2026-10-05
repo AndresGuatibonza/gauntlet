@@ -87,6 +87,11 @@ describe("claimActionPackage", () => {
     await store.failActionPackage(first.id, "boom");
     const final = await store.claimActionPackage(scan, 0, "retry-client", LIMITS);
     expect(final).toMatchObject({ outcome: "existing", state: { state: "failed", canRetry: false } });
+    // The stored "please try again" message is replaced once no retries are left.
+    if (final.outcome === "existing" && final.state.state === "failed") {
+      expect(final.state.errorMessage).toContain("can't be retried");
+      expect(final.state.errorMessage).not.toContain("boom");
+    }
   });
 
   it("treats a generation stuck past the limit as failed and lets it be retried", async () => {

@@ -387,15 +387,14 @@ interface ActionPackageRow {
 function rowToPackageState(row: ActionPackageRow): ActionPackageState {
   if (row.status === "ready" && row.package) return { state: "ready", id: row.id, package: row.package };
   if (row.status === "generating" && !row.stale) return { state: "generating", id: row.id };
-  return {
-    state: "failed",
-    id: row.id,
-    errorMessage:
-      row.status === "generating"
-        ? "Writing the implementation brief took too long and was stopped."
-        : (row.error_message ?? "Writing the implementation brief failed."),
-    canRetry: row.attempts < MAX_PACKAGE_ATTEMPTS,
-  };
+  const canRetry = row.attempts < MAX_PACKAGE_ATTEMPTS;
+  // The stored message invites a retry; once none are left, say so instead.
+  const errorMessage = !canRetry
+    ? `Gauntlet couldn't write this implementation brief after ${row.attempts} tries, so this opportunity can't be retried. Try Build this on another opportunity.`
+    : row.status === "generating"
+      ? "Writing the implementation brief took too long and was stopped."
+      : (row.error_message ?? "Writing the implementation brief failed.");
+  return { state: "failed", id: row.id, errorMessage, canRetry };
 }
 
 const PACKAGE_ROW_SQL = `select id, status, package, error_message, attempts,
