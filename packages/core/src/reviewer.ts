@@ -5,9 +5,9 @@
  * workflow. It reviews the top recommendations before display... Return a
  * concise review record for debugging and future experiment memory."
  *
- * Scope decision (confirmed with Andres): this checklist -- originally
- * written in the contract doc as something Andres applied by hand during
- * the concierge round -- is now automated as a second Claude API call
+ * Scope decision: this checklist -- originally written in the contract
+ * doc as something applied by hand during the concierge round -- is now
+ * automated as a second Claude API call
  * against the Scientist's already-validated Opportunity Report, rather
  * than staying a manual step. It never re-derives evidence; it only
  * critiques the cards it is given, per the contract §3 checklist:

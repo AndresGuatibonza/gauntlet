@@ -8,8 +8,7 @@
  * answer (counts come straight from scan_jobs -- see
  * migrations/002_scan_rate_limit.sql and store.ts).
  *
- * Default numbers (chosen deliberately restrictive, confirmed with Andres
- * 2026-09-28): the current stage is the Concierge Validation Plan -- 10-20
+ * Default numbers (chosen deliberately restrictive, 2026-09-28): the current stage is the Concierge Validation Plan -- 10-20
  * design partners in total (contract doc §4) -- so no legitimate visitor
  * needs more than a handful of scans a day, and the whole product doesn't
  * need more than ~20. Both are overridable per environment:

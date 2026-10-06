@@ -76,7 +76,7 @@ export function useScanJob(jobId: string | null): { job: ScanJobResponse | null;
 }
 
 /**
- * A few plain words per stage (Khalil's request) describing what that
+ * A few plain words per stage (a product requirement) describing what that
  * stage really does. Shown when the scan hasn't reported a more specific
  * step, and rotated during the two long Claude calls, which can't report
  * finer progress of their own.

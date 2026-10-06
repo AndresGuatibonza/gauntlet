@@ -323,7 +323,7 @@ export interface RetentionPolicy {
 }
 
 /**
- * Data retention (PRD §18 open question; policy in HANDOFF.md). One
+ * Data retention (PRD §18 open question; policy in TECHNICAL_OVERVIEW.md). One
  * transaction: clear client IP hashes on scan_jobs and action_packages once
  * their quotas no longer need them, then delete scans past the retention
  * period (packages and ledger records cascade with them). scan_events rows

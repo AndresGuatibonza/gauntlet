@@ -4,7 +4,7 @@
  * implementation for production, and a fake for tests -- so scientist.ts
  * and reviewer.ts never make a real network call in the test suite.
  *
- * Scope decision (confirmed with Andres): the Scientist (§8.3) and the
+ * Scope decision: the Scientist (§8.3) and the
  * Reviewer/Critic (§8.4) both reason in natural language over the Evidence
  * Packet -- that is not a deterministic-rules task like the extractor, so
  * both are implemented as calls to the Claude API (Anthropic), each with a

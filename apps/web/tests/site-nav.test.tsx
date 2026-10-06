@@ -22,7 +22,7 @@ describe("navItems", () => {
 describe("SiteNav", () => {
   it("marks the current area and offers sign-out when signed in", () => {
     pathname = "/reports";
-    const { container, getAllByText } = render(<SiteNav accountsEnabled signedIn login="andres" />);
+    const { container, getAllByText } = render(<SiteNav accountsEnabled signedIn login="octocat" />);
     const inline = container.querySelector(".site-nav-inline")!;
     const current = inline.querySelector('[aria-current="page"]')!;
     expect(current.textContent).toBe("Reports");
@@ -45,7 +45,7 @@ describe("SiteNav", () => {
   it("opens the menu and closes it with Escape or a click outside", () => {
     const { getByRole, queryByRole, container } = render(
       <div>
-        <SiteNav accountsEnabled signedIn login="andres" />
+        <SiteNav accountsEnabled signedIn login="octocat" />
         <p>outside</p>
       </div>,
     );

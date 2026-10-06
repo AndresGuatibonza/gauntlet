@@ -16,7 +16,7 @@ const updateExperiment = vi.fn();
 vi.mock("@/lib/store", () => ({ recordScanEvent, claimScan, getScanOwner, getExperimentForCard, updateExperiment }));
 
 const SCAN = "3f2a1c4e-9b7d-4e21-8a6f-0c5d2e7b9a10";
-const USER = { id: "11111111-2222-4333-8444-555555555555", login: "andres", avatarUrl: null };
+const USER = { id: "11111111-2222-4333-8444-555555555555", login: "octocat", avatarUrl: null };
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -1,4 +1,4 @@
-# Gauntlet — Technical Handoff
+# Gauntlet — Technical Overview
 
 Gauntlet is the "Product Scientist & Fast-Value Loop" from PRD v2 (Lean
 MVP). Given a public product URL, it collects observable evidence from
@@ -564,7 +564,9 @@ expected to be clean.
    partial (recorded). Declared dependencies are not proof of use on a
    given path. Access lists are refreshed only on reconnection; access
    removed on GitHub surfaces as a clear error at the next deep scan.
-   Not yet run against a real repository with the real App.
+   Verified once in production (2026-10-06) on this repository: it picked
+   the right files, found two facts the public scan had wrong (an existing
+   placeholder, a second form field) and lowered confidence accordingly.
 9. **Token Profiler coverage**: AI evidence covers only the chosen
    connectors and window, and at most 500 sessions. Token Profiler has no
    date filter, so every session of a connector is listed and filtered

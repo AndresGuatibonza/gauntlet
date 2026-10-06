@@ -5,8 +5,8 @@
  *
  * maxDuration = 300 matches the Hobby plan's fixed ceiling (Vercel's
  * current limits, checked 2026-09: Hobby is 300s default *and* max; Pro
- * goes to 800s, 1800s in beta). Confirmed with Andres: deploying on Hobby
- * for the MVP. If the pipeline is later found to routinely need more than
+ * goes to 800s, 1800s in beta). Decision: deploying on Hobby for the
+ * MVP. If the pipeline is later found to routinely need more than
  * 300s (most likely case: both the Scientist and the Reviewer need their
  * one automatic corrective retry in the same run), that's the concrete
  * signal to move to Pro and raise this to 800 -- not something to

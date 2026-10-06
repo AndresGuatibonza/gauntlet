@@ -42,7 +42,7 @@ vi.mock("@/lib/build-repo-brief", () => ({ runRepoBriefJob }));
 import { GITHUB_STATE_COOKIE, newGitHubState } from "@/lib/github-state";
 
 const SCAN = "3f2a1c4e-9b7d-4e21-8a6f-0c5d2e7b9a10";
-const USER = { id: "11111111-2222-4333-8444-555555555555", login: "andres", avatarUrl: null };
+const USER = { id: "11111111-2222-4333-8444-555555555555", login: "octocat", avatarUrl: null };
 const CONFIG = { appId: "1", slug: "gauntlet-dev", clientId: "Iv1", clientSecret: "s", privateKey: {} };
 const WORKSPACE = { workspaceId: "aaaaaaaa-0000-4000-8000-000000000001", ownerUserId: USER.id };
 const REPO = { installationId: 7, repositoryId: 42, fullName: "acme/web", defaultBranch: "main", connectedAt: "2026-10-05T15:00:00.000Z" };

@@ -6,8 +6,8 @@ improvement opportunities and proposes a defensible experiment for each.
 See the Gauntlet PRD v2 (Lean MVP) for the full product spec and Build
 Order sequence.
 
-> **Picking this up?** Start with [`HANDOFF.md`](HANDOFF.md) -- current
-> status, decisions and their reasons, known risks, and what's next.
+> **Technical overview:** [`TECHNICAL_OVERVIEW.md`](TECHNICAL_OVERVIEW.md)
+> -- current status, decisions and their reasons, known risks, and what's next.
 
 **Status:** Build Order #0 (evidence contract) done. Build Order #1
 (Public URL Ingestion Engine) done and validated against real internet.
@@ -21,7 +21,7 @@ app, a real Claude API call, polled to completion and rendered as a
 ranked report -- confirmed against a second real run on `https://otter.ai/`
 (4 Opportunity Cards, ranked by impact/effort/confidence, each with its
 supporting evidence and a proposed experiment) -- and **deployed on
-Vercel** (confirmed by Andres 2026-09-25), with a per-client and global
+Vercel** (since 2026-09-25), with a per-client and global
 scan quota on the public endpoint. See "What's next" for what's still
 open.
 
@@ -33,14 +33,14 @@ contract before any code was written, per the PRD's own sequencing rule:
 *"do not build a generalized ingestion platform before proving that one
 small Evidence Packet can produce recommendations users trust."*
 
-**Scope decisions, confirmed with Andres:**
+**Scope decisions:**
 - The Concierge Validation Plan (§4 of the contract doc) is still open --
   no real design partner has run through the full loop, only the two
   calibration dry-runs. Build Orders #1-#3 were all implemented anyway
   (implement now, calibrate against real scans rather than waiting on
   partner recruitment).
 - The Reviewer/Critic (§8.4), originally scoped in the contract doc as a
-  manual checklist Andres applies by hand, is automated here as a second
+  manual checklist applied by hand, is automated here as a second
   Claude API call, not a manual step.
 - Build Order #3 is a real publicly hosted web app (Next.js on Vercel),
   not a local-only UI, per the PRD's own §8.5. Signup is a placeholder
@@ -129,7 +129,7 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
   shows trace-derived evidence (PRD §8.6).
 - **Web app** (`apps/web`, Build Order #3) -- landing page (paste a
   public URL, no account), an async job API, and a polling report page.
-  Architecture, decided with Andres before writing code:
+  Architecture, decided before writing code:
   - **Async job pattern, not a single synchronous request.** Checked
     Vercel's actual current limits before deciding (2026-09): Hobby is a
     fixed 300s ceiling; the scan+Scientist+Reviewer pipeline, with
@@ -157,8 +157,8 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
     answers the scanner with HTTP 403, as `www.perplexity.ai` does): it
     fails fast with the real reason *before* any Claude call, instead of
     asking the Scientist for cards it cannot cite. Sites that block
-    automated requests are an accepted v0 limitation (decided with
-    Andres 2026-09-25) -- no headless browser, no user-agent spoofing.
+    automated requests are an accepted v0 limitation (decided
+    2026-09-25) -- no headless browser, no user-agent spoofing.
   - **Scan quota on the public endpoint** (`lib/rate-limit.ts`,
     migration `002_scan_rate_limit.sql`). `POST /api/scans` is
     unauthenticated and every scan crawls a third-party site and spends
@@ -657,10 +657,9 @@ select
 ## What's next
 
 1. The Concierge Validation Plan (§4) is still open -- no real design
-   partner has seen a report yet. That recruitment stays a product
-   decision for Andres, not something to keep deferring indefinitely now
-   that there's a working, publicly-hostable, end-to-end-validated report
-   to actually show someone.
+   partner has seen a report yet. Recruiting them is a product decision;
+   there is now a working, publicly hosted, end-to-end-validated report to
+   show them.
 2. Build Order #4 (GitHub deep scan) is built (repo-aware briefs, above).
    Next in the PRD is #6, the first production data adapter (PostHog by
    default), which the concierge round should choose (contract §6).

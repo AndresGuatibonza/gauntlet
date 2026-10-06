@@ -1,6 +1,6 @@
 /**
- * The "what is the scan doing right now" line (Khalil's request: stream a
- * few words per stage instead of only a moving dot). run-scan.ts reports
+ * The "what is the scan doing right now" line (a product requirement:
+ * stream a few words per stage instead of only a moving dot). run-scan.ts reports
  * real steps here; the report page displays them under the stage tracker.
  *
  * Writes are serialized (each waits for the previous one), so a slow write

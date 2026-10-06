@@ -13,8 +13,8 @@
  * past it (via AnimatePresence) -- rather than one persistent dot whose
  * animate target is switched between an infinite keyframe loop and a
  * static value. The latter looked right in principle but visibly kept
- * pulsing on already-completed stages in practice (confirmed by Andres
- * against the real running app) -- retargeting away from an infinite
+ * pulsing on already-completed stages in practice (observed against the
+ * real running app) -- retargeting away from an infinite
  * repeat mid-cycle isn't something to rely on. A dot that fully unmounts
  * can't keep animating.
  *
