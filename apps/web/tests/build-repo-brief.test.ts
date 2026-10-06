@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const { recorder } = vi.hoisted(() => ({ recorder: { onUsage: vi.fn(), flush: vi.fn(async () => {}) } }));
+vi.mock("@/lib/llm-usage", () => ({ createUsageRecorder: vi.fn(() => recorder) }));
+
 const { core, getScanJob, getActionPackage, repoStore, mintRepositoryToken, readGitHubAppConfig } = vi.hoisted(() => ({
   core: {
     analyzeRepositoryForCard: vi.fn(),
@@ -29,6 +32,7 @@ vi.mock("@/lib/github-app", async (orig) => ({ ...(await orig<typeof import("@/l
 import { ActionPackageError, RepoAccessError, RepoAnalysisError, LlmCallError } from "@gauntlet/core";
 import { GitHubAppError } from "@/lib/github-app";
 import { repoBriefFailureMessage, runRepoBriefJob } from "@/lib/build-repo-brief";
+import { createUsageRecorder } from "@/lib/llm-usage";
 
 const SCAN = "3f2a1c4e-9b7d-4e21-8a6f-0c5d2e7b9a10";
 const card = { title: "Card" };
@@ -57,6 +61,17 @@ describe("runRepoBriefJob", () => {
     expect(core.generateActionPackage).toHaveBeenCalledWith(card, packet, expect.anything(), { repoAnalysis: analysis });
     expect(repoStore.completeRepoBrief).toHaveBeenCalledWith("b1", { pkg: true });
     expect(repoStore.failRepoBrief).not.toHaveBeenCalled();
+  });
+
+  it("records every model call against this card's repo brief, and flushes even when it fails", async () => {
+    await runRepoBriefJob("b1", SCAN, 0, false);
+    expect(createUsageRecorder).toHaveBeenCalledWith({ scanJobId: SCAN, phase: "repo_brief", cardIndex: 0 });
+    expect(core.createAnthropicLlmClient).toHaveBeenCalledWith({ onUsage: recorder.onUsage });
+    expect(recorder.flush).toHaveBeenCalledTimes(1);
+
+    core.generateActionPackage.mockRejectedValueOnce(new LlmCallError("down"));
+    await runRepoBriefJob("b1", SCAN, 0, false);
+    expect(recorder.flush).toHaveBeenCalledTimes(2);
   });
 
   it("reuses a stored analysis on retry: no GitHub read, no analysis call", async () => {

@@ -80,11 +80,14 @@ describe("analyzeRepositoryForCard", () => {
   it("selects files, cites grounded lines and refines the card", async () => {
     const k = await signalCount();
     const prompts: string[] = [];
+    const purposes: (string | undefined)[] = [];
     const llm = fakeLlmClient((o, i) => {
       prompts.push(o.messages.at(-1)!.content);
+      purposes.push(o.purpose);
       return i === 0 ? selection() : analysis(k + 1);
     });
     const result = await analyzeRepositoryForCard(card, packet, reader(), llm, { now: () => NOW });
+    expect(purposes).toEqual(["repo_selection", "repo_analysis"]);
 
     expect(RepoAnalysisSchema.parse(result)).toEqual(result);
     const { source, items } = result.codeContext;

@@ -310,7 +310,7 @@ export async function generateActionPackage(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let raw: string;
     try {
-      raw = await llmClient.complete({ system: systemPrompt(mode), messages, maxTokens: 8000 });
+      raw = await llmClient.complete({ system: systemPrompt(mode), messages, maxTokens: 8000, purpose: "action_package" });
     } catch (err) {
       if (err instanceof LlmCallError) {
         throw new ActionPackageError(`Could not reach the Claude API (attempt ${attempt}/${maxAttempts}): ${err.message}`, err);

@@ -20,7 +20,7 @@
  */
 import { z } from "zod";
 import type { EvidencePacket } from "./evidence-packet.js";
-import { LlmCallError, type LlmClient, type LlmMessage } from "./llm-client.js";
+import { LlmCallError, type LlmClient, type LlmMessage, type LlmPurpose } from "./llm-client.js";
 import { ConfidenceLevelSchema, EffortLevelSchema, type OpportunityCard } from "./opportunity-card.js";
 import { citedEvidenceFor, type CitedEvidence } from "./action-package.js";
 import {
@@ -362,13 +362,14 @@ async function callWithRetry<T>(
   maxAttempts: number,
   parse: (raw: string) => T | { error: string },
   step: string,
+  purpose: LlmPurpose,
 ): Promise<T> {
   const messages: LlmMessage[] = [{ role: "user", content: firstPrompt }];
   let lastError = "";
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let raw: string;
     try {
-      raw = await llm.complete({ system, messages, maxTokens });
+      raw = await llm.complete({ system, messages, maxTokens, purpose });
     } catch (err) {
       if (err instanceof LlmCallError) throw new RepoAnalysisError(`Could not reach the Claude API during ${step} (attempt ${attempt}/${maxAttempts}): ${err.message}`, err);
       throw err;
@@ -441,6 +442,7 @@ export async function analyzeRepositoryForCard(
       return "error" in result ? result : result.selection;
     },
     "file selection",
+    "repo_selection",
   );
 
   const files: ShownFile[] = [];
@@ -487,6 +489,7 @@ export async function analyzeRepositoryForCard(
         inspected,
       }),
     "code analysis",
+    "repo_analysis",
   );
 
   return RepoAnalysisSchema.parse({

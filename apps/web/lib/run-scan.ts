@@ -35,10 +35,13 @@ import {
 } from "@gauntlet/core";
 import { recordScanEvent, setScanProgress, updateScanJob } from "./store.js";
 import { createProgressReporter, describePage, plural } from "./progress.js";
+import { createUsageRecorder } from "./llm-usage.js";
 
 export async function runScanJob(jobId: string, url: string, category: "ai_tool" | "ai_saas"): Promise<void> {
   // Real steps, in plain words, for the activity line under the tracker.
   const progress = createProgressReporter((p) => setScanProgress(jobId, p));
+  // Every Scientist/Reviewer call is recorded (model, prompt, tokens, cost).
+  const usage = createUsageRecorder({ scanJobId: jobId, phase: "scan" });
   try {
     await updateScanJob(jobId, { status: "scanning" });
     progress.report("scanning", "Checking your application");
@@ -96,7 +99,7 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
 
     let llmClient;
     try {
-      llmClient = createAnthropicLlmClient();
+      llmClient = createAnthropicLlmClient({ onUsage: usage.onUsage });
     } catch (err) {
       await failJob(jobId, err instanceof Error ? err.message : String(err));
       return;
@@ -141,6 +144,8 @@ export async function runScanJob(jobId: string, url: string, category: "ai_tool"
       // down), there's nothing further to do from inside a background
       // after() callback -- there's no request left to report to.
     });
+  } finally {
+    await usage.flush();
   }
 }
 

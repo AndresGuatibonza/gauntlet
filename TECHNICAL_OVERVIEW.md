@@ -50,7 +50,8 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `evidence-packet.ts` | Zod schema for the packet, plus `hasInsufficientEvidence` / `describeInsufficientEvidence` (the zero-evidence guard). Cross-field rules: `aiEvidence` is populated exactly when `sourceReliability` is `public_scan_plus_ai_traces`, and every citable id (E* and A*) is unique. `citableEvidenceIds()` lists them. |
 | `token-profiler-adapter.ts` | Contract §1.6. `readTokenProfiler()` reads a local Token Profiler's HTTP API (sessions, events, flags, context analysis), validating every response. `buildAiEvidence()` deterministically maps it to `aiEvidence` items (usage profile, failure rate, one item per fired flag, context repetition) plus a `notEvaluable` list. `attachAiEvidence()` returns an enriched copy of a packet. |
 | `opportunity-card.ts` | Zod schema for cards and reports; `computeRankScore = impact × evidenceQuality ÷ effort` (each 1–3). |
-| `llm-client.ts` | Anthropic SDK wrapper. Model `claude-sonnet-5`, `max_tokens` 16000 (the model spends part of the budget on thinking before the text block; 4096 truncated real responses). Honors `NODE_EXTRA_CA_CERTS` for TLS-intercepting networks. |
+| `llm-client.ts` | Anthropic SDK wrapper. Model `claude-sonnet-5`, `max_tokens` 16000 (the model spends part of the budget on thinking before the text block; 4096 truncated real responses). Honors `NODE_EXTRA_CA_CERTS` for TLS-intercepting networks. Each call carries its pipeline step (`purpose`); an optional `onUsage` callback receives one `LlmUsage` per call (served model, `promptFingerprint` of the system prompt, tokens, stop reason, duration, ok), including billed responses without text and transport failures. |
+| `llm-pricing.ts` | Estimated cost: USD per million tokens per model (`MODEL_PRICES`, dated by `PRICES_AS_OF`); a dated snapshot prices like its alias; unknown models get no estimate. Observability only, never billing. |
 | `scientist.ts` | First Claude call. Must return 3–5 cards, exactly one `build_this`, and cite only evidence ids that exist in the packet (E*, and A* when the packet carries AI evidence). Invalid output gets one corrective retry with the exact validation error. Cards are ranked by `rankScore`. |
 | `action-package.ts` | "Build this" (contract §2.2–§2.3). `generateActionPackage()`: one Claude call (+1 corrective retry) writes the engineering parts; the card's hypothesis, experiment and cited evidence are copied in verbatim; rejects evidence the card doesn't cite and file-path-like components. `renderCodingAgentPrompt()` / `renderActionPackageMarkdown()`: templates over the validated package. `planExperimentRecord()` and `ExperimentRecordSchema` (ledger rules). |
 | `repo-evidence.ts` | Contract §1.7. `RepoReader` (one repository at one commit), the code context schema (C* items pinned to a commit, line citations only in inspected files), `detectRepoSignals()` (no LLM: layout, languages, declared framework/AI/flag/analytics/test libraries, test files, CI/deployment, CODEOWNERS) and `candidatePaths()` (bounded list of readable source files). Strict `owner/name` validation. |
@@ -90,10 +91,12 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `lib/scan-client.ts` | Polling hook, job response type, stage phrases and the activity-line selection rule. |
 | `lib/progress.ts` | Serialized, best-effort progress writer used by the pipeline. |
 | `lib/run-scan.ts` | The pipeline for one job, run inside Next.js `after()` (the function keeps running after the HTTP response). |
+| `lib/llm-usage.ts`, `lib/usage-report.ts`, `scripts/usage.ts` | Migration 009: the per-job usage recorder (one `llm_calls` row and one JSON log line per call, best-effort, flushed before the job returns), the per-report generation summary and per-phase/per-day totals; `npm run usage`. |
+| `app/api/scans/[id]/packages`, `lib/package-response.ts` | Every brief a report already has, by card, so reopening a report shows them without another "Build this"; the response shape shared with the per-card route. |
 | `lib/store.ts`, `lib/db.ts` | Postgres access through Supabase's transaction pooler; TLS with Supabase's own CA embedded (`lib/supabase-ca.ts`). |
 | `lib/rate-limit.ts` | Scan quota logic and client IP hashing. |
 | `lib/events.ts` | Event and rating vocabulary, request schema, validation against the job. |
-| `components/opportunity-card.tsx` | One card: evidence, rationale, experiment, actions. |
+| `components/opportunity-card.tsx` | One card: header (rank, surface, title, score chips) always visible; body (hypothesis, Summary / Evidence / Experiment tabs, actions) expanded on the hero only. |
 | `components/status-tracker.tsx` | Stage indicator (queued → scanning → analyzing → reviewing). |
 | `components/theme-toggle.tsx` | Light/dark switch. |
 | `app/globals.css` | Design tokens for both themes and all component styles. |
@@ -348,6 +351,14 @@ attempts, requested_by for the per-account quota). Events
 `github_connect_started`, `github_connected` (report-level) and
 `repo_brief_generated` (card event). No GitHub token is stored anywhere.
 
+**`009_llm_calls.sql`**: one row per model call: scan id and phase
+(`scan`, `package`, `repo_brief`; card index for the two brief phases),
+step (`purpose`), served model, prompt fingerprint, deployed commit
+(`app_version`), input/output/cache tokens, estimated `cost_usd` (null
+for an unpriced model), stop reason, duration, `ok`. `scan_job_id` is
+deliberately not a foreign key, so cost history outlives scan retention;
+no prompt or response text, IP or identity is stored.
+
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
 intent, `wrong` ratings as a proxy for false confidence).
@@ -379,13 +390,27 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 6. Web UI
 
-- **Cards** show: change surface, title, hypothesis, why it matters,
-  impact / effort / confidence / evidence quality with their rationales,
-  what the public surface shows versus what connected data would confirm,
-  the cited evidence (observation, excerpt, source link, confidence) and
-  the full experiment (control, variant, audience, primary metric,
-  guardrails, stopping rule). The PRD also lists "assumptions"; the
-  contract has no such field, so it is not shown.
+- **Report layout** is compact, so it reads as a ranked list first: only
+  the hero card starts expanded; the others show rank, change surface,
+  title and one row of score chips (impact, effort, confidence, evidence
+  quality, and "Brief ready" when one exists) and expand from the title.
+  Measured on a 4-card report: 1.7 screens at 1440px (was 4.6), 2.5 at
+  390px (was 7.7).
+- **Cards** contain: the hypothesis, then tabs: Summary (why it matters,
+  what the public surface shows, what connected data would confirm, the
+  impact and effort rationales), Evidence (observation, excerpt, source
+  link, confidence) and Experiment (control, variant, audience, primary
+  metric, guardrails, stopping rule). `evidence_viewed` and
+  `opportunity_opened` fire on the first switch to Evidence and
+  Experiment. The PRD also lists "assumptions"; the contract has no such
+  field, so it is not shown.
+- **Briefs** lead with the objective, copy/download, the flag and where to
+  change it; the full plan is folded under "Full brief" (the copied
+  prompt and the download always carry all of it). The repo-aware brief
+  leads with how the code moved confidence and effort (e.g. Medium →
+  High), then files and contradictions. Briefs already written come back
+  when the report is reopened (`GET /api/scans/:id/packages`); ones still
+  being written are followed until they finish.
 - **Themes**: every color is a CSS token defined for a light and a dark
   palette. Light is the default for everyone, whatever the OS prefers; the
   header switch sets `data-theme` on `<html>` and stores it in
@@ -444,8 +469,8 @@ intent, `wrong` ratings as a proxy for false confidence).
 
 ## 8. Testing
 
-`npm test` at the repo root runs all three workspaces (about 370 tests:
-CLI 35, core 152, web 181), plus 40 database integration tests. `npm run typecheck` and `npm run lint` are
+`npm test` at the repo root runs all three workspaces (about 400 tests:
+CLI 35, core 160, web 211), plus 46 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -490,7 +515,9 @@ expected to be clean.
   reconnection, connecting only readable repositories, briefs deleted on
   switch and disconnect, concurrent claims starting one generation, retry
   cap reusing the stored analysis, stuck briefs, per-account quota, the
-  ready-needs-analysis constraint, cascades). Each file uses its own throwaway
+  ready-needs-analysis constraint, cascades), and model usage (per-report
+  generation summary, per-phase averages, unpriced calls, rows surviving
+  their scan, constraints). Each file uses its own throwaway
   database. Run locally with
   `TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres DATABASE_SSL=disable npm run test:db --workspace=web`.
 
@@ -531,6 +558,9 @@ expected to be clean.
 | Gauntlet copies cited lines; the model only quotes | A citation is verified to exist in the file; the excerpt shown is the file's own text. |
 | Repo-aware brief is a second, private package | The public report stays shareable; the reviewed card and its ledger record are never rewritten (contract Amendment 3). |
 | Analysis stored before the package step | A retry after a failed package step doesn't re-read the repository or repeat two Claude calls (PRD §14 "resumable"). |
+| Prompt fingerprint instead of a version number | A SHA-256 prefix of the system prompt changes with any edit, so an output is always traceable to its exact prompt; nobody has to remember to bump a version. |
+| Usage written per call, best-effort, plus a log line | A job that dies halfway still leaves its calls; accounting can never fail or block the job it describes; the log keeps the numbers if the write fails. |
+| Tokens stored, cost estimated | Prices change and the table is maintained by hand; tokens allow recomputing, and an unknown model gets no estimate instead of a wrong one. |
 | `@gauntlet/core` has no build step | Next.js transpiles it (`transpilePackages`); one source of truth for CLI and web. |
 
 ## 10. Known limitations and risks
@@ -567,7 +597,11 @@ expected to be clean.
    Verified once in production (2026-10-06) on this repository: it picked
    the right files, found two facts the public scan had wrong (an existing
    placeholder, a second form field) and lowered confidence accordingly.
-9. **Token Profiler coverage**: AI evidence covers only the chosen
+9. **Cost figures are estimates**: from the price table in
+   `llm-pricing.ts`, which must be kept in line with Anthropic's published
+   prices by hand; the Anthropic Console's billing is authoritative. The
+   CLI does not record usage (web app only).
+10. **Token Profiler coverage**: AI evidence covers only the chosen
    connectors and window, and at most 500 sessions. Token Profiler has no
    date filter, so every session of a connector is listed and filtered
    locally. Product traces must arrive through a non-coding-agent

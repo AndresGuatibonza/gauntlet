@@ -9,6 +9,7 @@ export * from "./extractor.js";
 export * from "./normalizer.js";
 export * from "./opportunity-card.js";
 export * from "./llm-client.js";
+export * from "./llm-pricing.js";
 export * from "./scientist.js";
 export * from "./reviewer.js";
 export * from "./token-profiler-adapter.js";

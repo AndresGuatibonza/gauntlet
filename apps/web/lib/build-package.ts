@@ -14,8 +14,10 @@ import {
   planExperimentRecord,
 } from "@gauntlet/core";
 import { completeActionPackage, failActionPackage, getScanJob } from "./store.js";
+import { createUsageRecorder } from "./llm-usage.js";
 
 export async function runActionPackageJob(packageId: string, scanJobId: string, cardIndex: number): Promise<void> {
+  const usage = createUsageRecorder({ scanJobId, phase: "package", cardIndex });
   try {
     const job = await getScanJob(scanJobId);
     const card = job?.opportunityReport?.cards[cardIndex];
@@ -23,7 +25,7 @@ export async function runActionPackageJob(packageId: string, scanJobId: string, 
       await failActionPackage(packageId, "This report or opportunity is no longer available.");
       return;
     }
-    const pkg = await generateActionPackage(card, job.evidencePacket, createAnthropicLlmClient());
+    const pkg = await generateActionPackage(card, job.evidencePacket, createAnthropicLlmClient({ onUsage: usage.onUsage }));
     await completeActionPackage(packageId, pkg, planExperimentRecord(pkg));
   } catch (err) {
     // Details go to the log; the visitor gets a plain, actionable message.
@@ -35,5 +37,7 @@ export async function runActionPackageJob(packageId: string, scanJobId: string, 
     await failActionPackage(packageId, message).catch((writeErr) => {
       console.error("[build-package] could not record the failure:", writeErr);
     });
+  } finally {
+    await usage.flush();
   }
 }

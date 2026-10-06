@@ -11,6 +11,7 @@
  * prompt that forces the response into the v0 contract shape, validated
  * with Zod exactly like the Evidence Packet itself.
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Agent as HttpsAgent } from "node:https";
 import { rootCertificates } from "node:tls";
@@ -20,15 +21,52 @@ export interface LlmMessage {
   content: string;
 }
 
+/** Which pipeline step a call belongs to, for usage records. */
+export type LlmPurpose = "scientist" | "reviewer" | "action_package" | "repo_selection" | "repo_analysis";
+
 export interface LlmCallOptions {
   system: string;
   messages: LlmMessage[];
   maxTokens?: number;
+  purpose?: LlmPurpose;
 }
 
 export interface LlmClient {
   /** Returns the raw text of the model's response. Throws on transport/API failure. */
   complete(options: LlmCallOptions): Promise<string>;
+}
+
+/**
+ * One model call, as billed: what produced it (step, model, system prompt
+ * fingerprint) and what it cost in tokens. Recorded for every call that
+ * reached the API -- including a response with no usable text, which is
+ * still billed -- and, with zero tokens, for a call that failed in
+ * transport, so failures are visible too.
+ */
+export interface LlmUsage {
+  purpose: LlmPurpose | null;
+  /** The model that served the call (the API's answer), or the one requested when the call failed. */
+  model: string;
+  /** promptFingerprint(system): which prompt version produced the output. */
+  promptHash: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  stopReason: string | null;
+  durationMs: number;
+  /** The call returned a text block (whether it then passed validation is the caller's concern). */
+  ok: boolean;
+}
+
+/**
+ * A short, stable fingerprint of a system prompt: the first 12 hex digits
+ * of its SHA-256. Any edit to a prompt changes it, so stored outputs can be
+ * traced to the exact prompt text without a version number someone has to
+ * remember to bump.
+ */
+export function promptFingerprint(system: string): string {
+  return createHash("sha256").update(system, "utf8").digest("hex").slice(0, 12);
 }
 
 export class LlmCallError extends Error {
@@ -111,7 +149,12 @@ function describeErrorChain(err: unknown, depth = 0): string {
  * an error message (see the try/catch below: only the SDK's own error
  * message/status is surfaced, not request internals).
  */
-export function createAnthropicLlmClient(options?: { apiKey?: string; model?: string }): LlmClient {
+export function createAnthropicLlmClient(options?: {
+  apiKey?: string;
+  model?: string;
+  /** Called once per call with its usage. Must not throw; if it does, the error is logged and ignored. */
+  onUsage?: (usage: LlmUsage) => void;
+}): LlmClient {
   const apiKey = options?.apiKey ?? process.env["ANTHROPIC_API_KEY"];
   if (!apiKey) {
     throw new LlmCallError(
@@ -119,9 +162,22 @@ export function createAnthropicLlmClient(options?: { apiKey?: string; model?: st
     );
   }
   const model = options?.model ?? DEFAULT_MODEL;
+  const onUsage = options?.onUsage;
+
+  function report(usage: LlmUsage): void {
+    if (!onUsage) return;
+    try {
+      onUsage(usage);
+    } catch (err) {
+      // Usage accounting must never fail the call it describes.
+      console.error("[llm-client] onUsage failed:", err instanceof Error ? err.message : err);
+    }
+  }
 
   return {
-    async complete({ system, messages, maxTokens }: LlmCallOptions): Promise<string> {
+    async complete({ system, messages, maxTokens, purpose }: LlmCallOptions): Promise<string> {
+      const startedAt = Date.now();
+      const base = { purpose: purpose ?? null, promptHash: promptFingerprint(system) };
       // Lazy import so tests that only use the fake client never need the
       // SDK installed/mocked, and so a missing API key fails fast above
       // rather than at import time.
@@ -136,6 +192,14 @@ export function createAnthropicLlmClient(options?: { apiKey?: string; model?: st
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
         });
         const textBlock = response.content.find((block) => block.type === "text");
+        report({
+          ...base,
+          ...usageOf(response.usage),
+          model: response.model || model,
+          stopReason: response.stop_reason ?? null,
+          durationMs: Date.now() - startedAt,
+          ok: Boolean(textBlock && textBlock.type === "text"),
+        });
         if (!textBlock || textBlock.type !== "text") {
           // Self-diagnosing rather than a dead end: the two real causes are
           // (a) max_tokens was too low and the model was cut off before any
@@ -150,6 +214,7 @@ export function createAnthropicLlmClient(options?: { apiKey?: string; model?: st
         return textBlock.text;
       } catch (err) {
         if (err instanceof LlmCallError) throw err;
+        report({ ...base, ...usageOf(undefined), model, stopReason: null, durationMs: Date.now() - startedAt, ok: false });
         // The SDK's own top-level message (e.g. "Connection error.") is
         // often just a wrapper -- the actually diagnosable detail (DNS
         // failure, proxy refusal, TLS error, timeout) lives one or more
@@ -158,6 +223,22 @@ export function createAnthropicLlmClient(options?: { apiKey?: string; model?: st
         throw new LlmCallError(`Claude API call failed: ${describeErrorChain(err)}`, err);
       }
     },
+  };
+}
+
+/**
+ * Token counts from the API's usage block. The cache fields are read
+ * defensively: the installed SDK's types predate them, and they are absent
+ * when prompt caching isn't used.
+ */
+function usageOf(usage: unknown): Pick<LlmUsage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens"> {
+  const u = (usage ?? {}) as Record<string, unknown>;
+  const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
+  return {
+    inputTokens: n(u["input_tokens"]),
+    outputTokens: n(u["output_tokens"]),
+    cacheReadTokens: n(u["cache_read_input_tokens"]),
+    cacheWriteTokens: n(u["cache_creation_input_tokens"]),
   };
 }
 

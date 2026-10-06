@@ -30,6 +30,7 @@ import {
   getWorkspaceRepository,
   saveRepoBriefAnalysis,
 } from "./repo-store.js";
+import { createUsageRecorder } from "./llm-usage.js";
 
 /** What the owner sees for a failure; never internal details. */
 export function repoBriefFailureMessage(err: unknown, repository: string): string {
@@ -56,6 +57,7 @@ export function repoBriefFailureMessage(err: unknown, repository: string): strin
 
 export async function runRepoBriefJob(briefId: string, scanJobId: string, cardIndex: number, reuseAnalysis: boolean): Promise<void> {
   let repositoryName = "the repository";
+  const usage = createUsageRecorder({ scanJobId, phase: "repo_brief", cardIndex });
   try {
     const job = await getScanJob(scanJobId);
     const card = job?.opportunityReport?.cards[cardIndex];
@@ -75,7 +77,7 @@ export async function runRepoBriefJob(briefId: string, scanJobId: string, cardIn
       await failRepoBrief(briefId, "GitHub connections are not available right now.");
       return;
     }
-    const llm = createAnthropicLlmClient();
+    const llm = createAnthropicLlmClient({ onUsage: usage.onUsage });
 
     let analysis: RepoAnalysis | null = reuseAnalysis ? await getRepoBriefAnalysis(briefId) : null;
     if (!analysis) {
@@ -95,5 +97,7 @@ export async function runRepoBriefJob(briefId: string, scanJobId: string, cardIn
     await failRepoBrief(briefId, repoBriefFailureMessage(err, repositoryName)).catch((writeErr) => {
       console.error("[repo-brief] could not record the failure:", writeErr);
     });
+  } finally {
+    await usage.flush();
   }
 }

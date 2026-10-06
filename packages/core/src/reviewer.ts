@@ -193,7 +193,7 @@ export async function reviewOpportunityReport(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let raw: string;
     try {
-      raw = await llmClient.complete({ system: SYSTEM_PROMPT, messages });
+      raw = await llmClient.complete({ system: SYSTEM_PROMPT, messages, purpose: "reviewer" });
     } catch (err) {
       if (err instanceof LlmCallError) {
         throw new ReviewerError(`Reviewer could not reach the Claude API (attempt ${attempt}/${maxAttempts}): ${err.message}`, err);

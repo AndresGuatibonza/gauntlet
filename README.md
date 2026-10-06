@@ -613,6 +613,39 @@ Reviewer needing their one corrective retry in the same run), that's the
 concrete signal to move to Pro and raise that constant to 800 -- not
 something to pre-optimize for without a real run proving it's needed.
 
+### Model usage and cost (`npm run usage`)
+
+Every Claude call made by a scan (Scientist, Reviewer), a "Build this"
+brief or a repo-aware brief (file selection, code analysis, brief) is
+recorded in `llm_calls` (migration `009_llm_calls.sql`, apply with
+`npm run migrate --workspace=web` before deploying):
+
+- **Reproducibility**: the model that served the call, the fingerprint of
+  the exact system prompt (first 12 hex digits of its SHA-256, so any edit
+  to a prompt changes it; `promptFingerprint` in `@gauntlet/core`) and the
+  deployed commit (`VERCEL_GIT_COMMIT_SHA`, set by Vercel).
+- **Observability**: input/output/cache tokens, estimated cost, stop
+  reason, duration, and whether the call returned text. Failed calls are
+  recorded too (zero tokens when the API was never reached). Each call is
+  also logged as one `{"event":"llm_call",...}` JSON line, so the numbers
+  are in the Vercel logs even if the database write fails.
+
+Costs are **estimates** from the price table in
+`packages/core/src/llm-pricing.ts` (USD per million tokens, dated by
+`PRICES_AS_OF`); check them against the Anthropic Console's billing,
+which is authoritative. A model missing from the table gets no estimate
+rather than a guess; tokens are always stored, so costs can be
+recomputed. No prompt or response text, IP or identity is stored, and
+rows deliberately outlive their scan's retention.
+
+```
+npm run usage --workspace=web                       # last 30 days, per phase and per day
+npm run usage --workspace=web -- --days 7
+npm run usage --workspace=web -- --scan <report id>  # models, prompts and commit behind one report
+```
+
+Reads `DATABASE_URL` from `apps/web/.env.local`. Read-only.
+
 ### Measuring the concierge validation (Supabase SQL Editor)
 
 Verified against a real Postgres 16. "Useful or better" is read as

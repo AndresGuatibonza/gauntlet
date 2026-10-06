@@ -156,7 +156,7 @@ export async function generateOpportunityReport(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let raw: string;
     try {
-      raw = await llmClient.complete({ system: SYSTEM_PROMPT, messages });
+      raw = await llmClient.complete({ system: SYSTEM_PROMPT, messages, purpose: "scientist" });
     } catch (err) {
       if (err instanceof LlmCallError) {
         throw new ScientistError(`Scientist could not reach the Claude API (attempt ${attempt}/${maxAttempts}): ${err.message}`, err);
