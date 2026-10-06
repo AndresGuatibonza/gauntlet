@@ -76,7 +76,8 @@ describe("OpportunityCardView", () => {
   });
 
   it("resolves each cited evidence id to its observation, excerpt and source link", () => {
-    const { container } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} />);
+    const { container, getByRole } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} />);
+    fireEvent.click(getByRole("tab", { name: "Evidence (2)" }));
     const items = container.querySelectorAll(".evidence-list li");
     expect(items).toHaveLength(2);
     const first = within(items[0] as HTMLElement);
@@ -90,12 +91,64 @@ describe("OpportunityCardView", () => {
     expect(within(items[1] as HTMLElement).getByRole("link").textContent).toBe("example.com");
   });
 
-  it("opens the evidence list on the hero card only", () => {
-    const hero = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} />);
-    expect((hero.container.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+  it("expands the hero only; any other card opens and closes from its title", () => {
+    const hero = render(<OpportunityCardView card={card()} isHero rank={1} evidenceById={EVIDENCE} />);
+    const heroToggle = hero.getByRole("button", { name: "Clarify overage policy" });
+    expect(heroToggle.getAttribute("aria-expanded")).toBe("true");
+    expect((hero.container.querySelector(".card-body") as HTMLElement).hidden).toBe(false);
+    expect(hero.getByText("#1")).toBeTruthy();
     cleanup();
-    const other = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} />);
-    expect((other.container.querySelector("details") as HTMLDetailsElement).open).toBe(false);
+
+    const other = render(<OpportunityCardView card={card()} rank={3} evidenceById={EVIDENCE} />);
+    const toggle = other.getByRole("button", { name: "Clarify overage policy" });
+    const body = other.container.querySelector(".card-body") as HTMLElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe(body.id);
+    expect(body.hidden).toBe(true);
+    expect(other.getByText("#3")).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(body.hidden).toBe(false);
+    fireEvent.click(toggle);
+    expect(body.hidden).toBe(true);
+  });
+
+  it("shows the scores as one row of chips, visible while collapsed", () => {
+    const { getByRole } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} />);
+    const chips = within(getByRole("list", { name: "Scores" }));
+    expect(chips.getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "Impact Medium",
+      "Effort Low",
+      "Confidence Medium",
+      "Evidence 2/3",
+    ]);
+  });
+
+  it("switches between Summary, Evidence and Experiment tabs, one panel at a time", () => {
+    const { getByRole } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} />);
+    const panel = (name: string) => document.getElementById(getByRole("tab", { name }).getAttribute("aria-controls")!)!;
+    expect(getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe("true");
+    expect(panel("Summary").hidden).toBe(false);
+    expect(panel("Evidence (2)").hidden).toBe(true);
+    expect(panel("Experiment").hidden).toBe(true);
+
+    fireEvent.click(getByRole("tab", { name: "Experiment" }));
+    expect(getByRole("tab", { name: "Experiment" }).getAttribute("aria-selected")).toBe("true");
+    expect(panel("Experiment").hidden).toBe(false);
+    expect(panel("Summary").hidden).toBe(true);
+  });
+
+  it("moves between tabs with the arrow keys, wrapping around", () => {
+    const { getByRole } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} />);
+    const summary = getByRole("tab", { name: "Summary" });
+    fireEvent.keyDown(summary, { key: "ArrowLeft" });
+    const experiment = getByRole("tab", { name: "Experiment" });
+    expect(experiment.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(experiment);
+    expect(experiment.tabIndex).toBe(0);
+    expect(summary.tabIndex).toBe(-1);
+    fireEvent.keyDown(experiment, { key: "ArrowRight" });
+    expect(getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("degrades gracefully when a cited id is missing from the packet", () => {
@@ -133,7 +186,7 @@ describe("card actions", () => {
 
   it("reports Build this clicks and each of the five contract ratings", () => {
     const a = actions();
-    const { getByText, getByRole } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} actions={a} />);
+    const { getByText, getByRole } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} actions={a} />);
     fireEvent.click(getByText("Build this", { exact: false }));
     expect(a.onBuildThis).toHaveBeenCalledTimes(1);
 
@@ -156,6 +209,7 @@ describe("card actions", () => {
     const { getByRole, getByText } = render(
       <OpportunityCardView
         card={card()}
+        isHero
         evidenceById={EVIDENCE}
         actions={actions({ rating: "useful", feedbackError: "Couldn't save your rating. Please try again." })}
       />,
@@ -165,28 +219,27 @@ describe("card actions", () => {
     expect(getByText("Couldn't save your rating.", { exact: false })).toBeTruthy();
   });
 
-  it("reports opening Evidence and Proposed experiment, once per open, not on close", () => {
+  it("reports the first switch to Evidence or Experiment, not re-selecting the shown tab", () => {
     const a = actions();
-    const { getByText } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} actions={a} />);
-    const evidence = getByText("Evidence (2)");
-    const experiment = getByText("Proposed experiment");
+    const { getByRole } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} actions={a} />);
+    fireEvent.click(getByRole("tab", { name: "Summary" })); // already shown
+    expect(a.onSectionOpened).not.toHaveBeenCalled();
 
-    fireEvent.click(evidence); // closed -> opening
+    fireEvent.click(getByRole("tab", { name: "Evidence (2)" }));
     expect(a.onSectionOpened).toHaveBeenLastCalledWith("evidence");
-    (evidence.parentElement as HTMLDetailsElement).open = true; // jsdom doesn't toggle on click
-    fireEvent.click(evidence); // open -> closing: not an "opened" event
+    fireEvent.click(getByRole("tab", { name: "Evidence (2)" })); // already shown
     expect(a.onSectionOpened).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(experiment);
+    fireEvent.click(getByRole("tab", { name: "Experiment" }));
     expect(a.onSectionOpened).toHaveBeenLastCalledWith("experiment");
+    fireEvent.click(getByRole("tab", { name: "Summary" })); // Summary is not a tracked section
     expect(a.onSectionOpened).toHaveBeenCalledTimes(2);
   });
 
-  it("does not count the hero's pre-opened Evidence as viewed until the visitor opens it", () => {
+  it("does not report a section just because a card was expanded", () => {
     const a = actions();
-    const { getByText } = render(<OpportunityCardView card={card()} isHero evidenceById={EVIDENCE} actions={a} />);
-    expect(a.onSectionOpened).not.toHaveBeenCalled();
-    fireEvent.click(getByText("Evidence (2)")); // already open -> this click closes it
+    const { getByRole } = render(<OpportunityCardView card={card()} evidenceById={EVIDENCE} actions={a} />);
+    fireEvent.click(getByRole("button", { name: "Clarify overage policy" }));
     expect(a.onSectionOpened).not.toHaveBeenCalled();
   });
 

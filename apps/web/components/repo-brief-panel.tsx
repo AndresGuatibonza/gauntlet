@@ -59,7 +59,23 @@ function activity(stage: "reading" | "writing", repository: string): string[] {
     : ["Writing the repo-aware brief", "Pinning the change to real files", "Planning the flag with the code's own tools"];
 }
 
-export function RepoBriefPanel({ scanId, cardIndex, repository }: { scanId: string; cardIndex: number; repository: string }): React.JSX.Element {
+/** The card's own levels from the public scan, so the repo-aware ones read as a change. */
+export interface PublicLevels {
+  confidence: string;
+  effort: string;
+}
+
+export function RepoBriefPanel({
+  scanId,
+  cardIndex,
+  repository,
+  publicLevels,
+}: {
+  scanId: string;
+  cardIndex: number;
+  repository: string;
+  publicLevels?: PublicLevels;
+}): React.JSX.Element {
   const url = `/api/scans/${scanId}/cards/${cardIndex}/repo-brief`;
   const [view, setView] = useState<BriefView>({ status: "loading" });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -136,17 +152,24 @@ export function RepoBriefPanel({ scanId, cardIndex, repository }: { scanId: stri
           )}
         </div>
       )}
-      {view.status === "ready" && <RepoBriefReady view={view} />}
+      {view.status === "ready" && <RepoBriefReady view={view} publicLevels={publicLevels} />}
     </section>
   );
 }
 
 const LEVEL: Record<string, string> = { low: "Low", medium: "Medium", high: "High" };
 
-function RepoBriefReady({ view }: { view: Extract<BriefView, { status: "ready" }> }): React.JSX.Element {
+function RepoBriefReady({
+  view,
+  publicLevels,
+}: {
+  view: Extract<BriefView, { status: "ready" }>;
+  publicLevels?: PublicLevels;
+}): React.JSX.Element {
   const { analysis, package: pkg } = view;
   const { refinement, codeContext } = analysis;
   const evidence = codeContext.items;
+  const moreCount = refinement.experimentNotes.length + refinement.stillMissing.length;
   return (
     <>
       <h3 className="package-title">What the code changes</h3>
@@ -154,14 +177,18 @@ function RepoBriefReady({ view }: { view: Extract<BriefView, { status: "ready" }
         From {codeContext.source.filesInspected.length} file(s) of <code>{codeContext.source.repository}</code> at{" "}
         <code>{codeContext.source.ref.slice(0, 7)}</code>, read {new Date(codeContext.source.pulledAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}.
       </p>
+      <ul className="card-chips repo-deltas" aria-label="Revised scores">
+        <LevelChange label="Confidence" before={publicLevels?.confidence} after={refinement.confidence.level} />
+        <LevelChange label="Effort" before={publicLevels?.effort} after={refinement.effort.level} />
+      </ul>
       <dl className="package-sections">
-        <dt>Confidence</dt>
+        <dt>Why the confidence</dt>
         <dd>
-          <strong>{LEVEL[refinement.confidence.level]}</strong> — {refinement.confidence.rationale} <Refs ids={refinement.confidence.evidenceRefs} />
+          {refinement.confidence.rationale} <Refs ids={refinement.confidence.evidenceRefs} />
         </dd>
-        <dt>Effort</dt>
+        <dt>Why the effort</dt>
         <dd>
-          <strong>{LEVEL[refinement.effort.level]}</strong> — {refinement.effort.rationale} <Refs ids={refinement.effort.evidenceRefs} />
+          {refinement.effort.rationale} <Refs ids={refinement.effort.evidenceRefs} />
         </dd>
         {refinement.implementationSurface.length > 0 && (
           <>
@@ -177,14 +204,6 @@ function RepoBriefReady({ view }: { view: Extract<BriefView, { status: "ready" }
             </dd>
           </>
         )}
-        {refinement.experimentNotes.length > 0 && (
-          <>
-            <dt>Running the experiment here</dt>
-            <dd>
-              <ul>{refinement.experimentNotes.map((n) => <li key={n}>{n}</li>)}</ul>
-            </dd>
-          </>
-        )}
         {refinement.contradictions.length > 0 && (
           <>
             <dt>Where the code disagrees with the public scan</dt>
@@ -193,11 +212,27 @@ function RepoBriefReady({ view }: { view: Extract<BriefView, { status: "ready" }
             </dd>
           </>
         )}
-        <dt>Still open</dt>
-        <dd>
-          <ul>{refinement.stillMissing.map((n) => <li key={n}>{n}</li>)}</ul>
-        </dd>
       </dl>
+
+      {moreCount > 0 && (
+        <details className="code-evidence">
+          <summary>Running it here and what is still open ({moreCount})</summary>
+          <dl className="package-sections">
+            {refinement.experimentNotes.length > 0 && (
+              <>
+                <dt>Running the experiment here</dt>
+                <dd>
+                  <ul>{refinement.experimentNotes.map((n) => <li key={n}>{n}</li>)}</ul>
+                </dd>
+              </>
+            )}
+            <dt>Still open</dt>
+            <dd>
+              <ul>{refinement.stillMissing.map((n) => <li key={n}>{n}</li>)}</ul>
+            </dd>
+          </dl>
+        </details>
+      )}
 
       <details className="code-evidence">
         <summary>Code evidence ({evidence.length})</summary>
@@ -244,6 +279,24 @@ function RepoBriefReady({ view }: { view: Extract<BriefView, { status: "ready" }
         </BriefDetails>
       </div>
     </>
+  );
+}
+
+/** "Confidence Medium → Low"; just the new level when the public one is unknown. */
+function LevelChange({ label, before, after }: { label: string; before?: string; after: string }): React.JSX.Element {
+  const to = LEVEL[after] ?? after;
+  const from = before ? (LEVEL[before] ?? before) : null;
+  return (
+    <li>
+      {label}{" "}
+      {from && from !== to && (
+        <>
+          <s>{from}</s> &rarr;{" "}
+        </>
+      )}
+      <strong>{to}</strong>
+      {from === to && <span> (unchanged)</span>}
+    </li>
   );
 }
 

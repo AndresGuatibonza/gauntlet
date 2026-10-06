@@ -17,8 +17,9 @@ import type { ScanJobResponse } from "@/lib/scan-client";
 import { ActionPackagePanel, type PackageView } from "@/components/action-package-panel";
 import { ExperimentTracker } from "@/components/experiment-tracker";
 import { useViewer, type ClaimState, type Viewer } from "@/lib/use-viewer";
-import { useRepository } from "@/lib/use-repository";
+import { useRepository, type RepositoryConnection } from "@/lib/use-repository";
 import { RepoConnection } from "@/components/repo-connection";
+import type { PublicLevels } from "@/components/repo-brief-panel";
 
 /** What came back from the GitHub round trip (?github=...), in words. */
 const GITHUB_RETURN: Record<string, { text: string; error: boolean }> = {
@@ -71,6 +72,20 @@ function toPackageView(res: Response, body: (PackageResponse & { error?: string 
   }
 }
 
+export type RestoredPackage = { cardIndex: number } & PackageResponse;
+
+/** A brief listed by GET /packages -> what its card shows; null = nothing yet, or still being written. */
+export function restoredView(entry: RestoredPackage): PackageView | null {
+  switch (entry.status) {
+    case "ready":
+      return { status: "ready", package: entry.package, codingAgentPrompt: entry.codingAgentPrompt, markdown: entry.markdown };
+    case "failed":
+      return { status: "failed", error: entry.error, canRetry: entry.canRetry };
+    default:
+      return null;
+  }
+}
+
 /**
  * Sends one funnel/feedback event (POST /api/scans/:id/events). Never
  * throws: analytics must not break the report. `keepalive` lets an event
@@ -105,6 +120,8 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
   // "Build this" implementation briefs, per card index.
   const [packages, setPackages] = useState<Record<number, PackageView>>({});
   const pollTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const packagesRef = useRef(packages);
+  packagesRef.current = packages;
   const { viewer, hasToken, claimState, claimError } = useViewer(job.id);
   const signInHref = `/signup?from=${job.id}`;
   const repo = useRepository(job.id, viewer?.isOwner === true);
@@ -138,10 +155,14 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
     setPackages((p) => ({ ...p, [cardIndex]: view }));
   }
 
-  /** Requests the brief (POST), then polls (GET) until it is ready or failed. */
-  async function requestPackage(cardIndex: number): Promise<void> {
+  /**
+   * Requests the brief (POST), then polls (GET) until it is ready or
+   * failed. Starting with GET only follows one already being written.
+   */
+  async function requestPackage(cardIndex: number, first: "POST" | "GET" = "POST"): Promise<void> {
     const url = `/api/scans/${job.id}/cards/${cardIndex}/package`;
     const startedAt = Date.now();
+    clearTimeout(pollTimers.current.get(cardIndex));
     setPackage(cardIndex, { status: "generating" });
 
     async function step(method: "POST" | "GET"): Promise<void> {
@@ -164,8 +185,33 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
       pollTimers.current.set(cardIndex, setTimeout(() => void step("GET"), PACKAGE_POLL_MS));
     }
 
-    await step("POST");
+    await step(first);
   }
+
+  // Briefs this report already has come back on reload, without another
+  // "Build this": ready and failed ones as they are, ones still being
+  // written followed until they finish. A card the visitor clicked in the
+  // meantime keeps what that click started.
+  const restoreRef = useRef(requestPackage);
+  restoreRef.current = requestPackage;
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/scans/${job.id}/packages`, { cache: "no-store" })
+      .then(async (res) => (res.ok ? ((await res.json()) as { packages?: RestoredPackage[] }) : null))
+      .then((body) => {
+        if (cancelled || !body?.packages) return;
+        for (const entry of body.packages) {
+          if (packagesRef.current[entry.cardIndex]) continue;
+          const view = restoredView(entry);
+          if (view) setPackages((p) => (p[entry.cardIndex] ? p : { ...p, [entry.cardIndex]: view }));
+          else if (entry.status === "generating") void restoreRef.current(entry.cardIndex, "GET");
+        }
+      })
+      .catch(() => undefined); // The report works without them; "Build this" still fetches each one.
+    return () => {
+      cancelled = true;
+    };
+  }, [job.id]);
 
   function buildThis(cardIndex: number): void {
     void sendScanEvent(job.id, { type: "build_this_requested", cardIndex });
@@ -193,6 +239,11 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
     return null;
   }
 
+  function publicLevels(cardIndex: number): PublicLevels | undefined {
+    const card = job.opportunityReport?.cards[cardIndex];
+    return card ? { confidence: card.confidence.level, effort: card.effort.level } : undefined;
+  }
+
   function actionsFor(cardIndex: number): CardActions {
     return {
       onSectionOpened: (section) => sectionOpened(cardIndex, section),
@@ -207,7 +258,11 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
           onRetry={() => void requestPackage(cardIndex)}
           connectRepoHref={`/signup?from=${job.id}&card=${cardIndex}`}
           tracking={trackingFor(cardIndex)}
-          repoSlot={viewer?.isOwner ? <RepoConnection scanId={job.id} cardIndex={cardIndex} repo={repo} /> : undefined}
+          repoSlot={
+            viewer?.isOwner ? (
+              <RepoConnection scanId={job.id} cardIndex={cardIndex} repo={repo} publicLevels={publicLevels(cardIndex)} />
+            ) : undefined
+          }
         />
       ) : null,
     };
@@ -248,12 +303,25 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
       <StaggerList className="card-stack">
         {hero && (
           <StaggerItem>
-            <OpportunityCardView card={hero.card} isHero evidenceById={evidenceById} actions={actionsFor(hero.index)} />
+            <OpportunityCardView
+              card={hero.card}
+              isHero
+              rank={1}
+              evidenceById={evidenceById}
+              actions={actionsFor(hero.index)}
+              briefReady={packages[hero.index]?.status === "ready"}
+            />
           </StaggerItem>
         )}
-        {rest.map(({ card, index }) => (
+        {rest.map(({ card, index }, position) => (
           <StaggerItem key={index}>
-            <OpportunityCardView card={card} evidenceById={evidenceById} actions={actionsFor(index)} />
+            <OpportunityCardView
+              card={card}
+              rank={position + (hero ? 2 : 1)}
+              evidenceById={evidenceById}
+              actions={actionsFor(index)}
+              briefReady={packages[index]?.status === "ready"}
+            />
           </StaggerItem>
         ))}
       </StaggerList>
@@ -267,17 +335,52 @@ export function ScanReport({ job }: { job: ScanJobResponse }): React.JSX.Element
         </FadeUp>
       )}
 
-      <FadeUp delay={0.25}>
-        <Link
-          href={`/signup?from=${job.id}`}
-          onClick={() => void sendScanEvent(job.id, { type: "deepen_analysis_clicked" }, true)}
-        >
-          <motion.button style={{ marginTop: 20 }} whileTap={{ scale: 0.97 }}>
-            Make this recommendation smarter &#8594;
-          </motion.button>
-        </Link>
-      </FadeUp>
+      <DeepenCta
+        scanId={job.id}
+        isOwner={viewer?.isOwner === true}
+        connection={repo.connection}
+        onClick={() => void sendScanEvent(job.id, { type: "deepen_analysis_clicked" }, true)}
+      />
     </>
+  );
+}
+
+/**
+ * "Make this recommendation smarter": the way to deeper evidence. Visitors
+ * sign in first; the report's owner goes straight to connecting GitHub,
+ * and once a repository is connected the repo-aware brief under each
+ * "Build this" result is that next step, so the button steps aside.
+ */
+export function DeepenCta({
+  scanId,
+  isOwner,
+  connection,
+  onClick,
+}: {
+  scanId: string;
+  isOwner: boolean;
+  connection: RepositoryConnection;
+  onClick: () => void;
+}): React.JSX.Element | null {
+  if (isOwner && (connection.status !== "ready" || connection.connected)) return null;
+  const button = (
+    <motion.button style={{ marginTop: 20 }} whileTap={{ scale: 0.97 }}>
+      Make this recommendation smarter &#8594;
+    </motion.button>
+  );
+  return (
+    <FadeUp delay={0.25}>
+      {isOwner ? (
+        // A route handler that redirects to GitHub: a full navigation, not a client one.
+        <a href={`/api/github/connect?scan=${scanId}`} onClick={onClick}>
+          {button}
+        </a>
+      ) : (
+        <Link href={`/signup?from=${scanId}`} onClick={onClick}>
+          {button}
+        </Link>
+      )}
+    </FadeUp>
   );
 }
 

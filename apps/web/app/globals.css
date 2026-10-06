@@ -222,15 +222,17 @@ button.secondary:hover:not(:disabled) {
   border-color: var(--accent-line);
 }
 
-/* Report: stack of Opportunity Cards */
+/* Report: stack of Opportunity Cards (components/opportunity-card.tsx).
+   Compact by design: header (rank, surface, title, score chips) always
+   visible; body expanded on the hero only. */
 .card-stack {
   display: grid;
-  gap: 18px;
-  margin-top: 28px;
+  gap: 12px;
+  margin-top: 24px;
 }
 
 .card {
-  padding: 28px;
+  padding: 20px 24px;
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--radius);
@@ -240,11 +242,13 @@ button.secondary:hover:not(:disabled) {
 
 .card.hero {
   border-color: var(--accent-line);
+  padding: 24px 28px;
 }
 
 @media (max-width: 560px) {
-  .card {
-    padding: 22px 18px;
+  .card,
+  .card.hero {
+    padding: 18px 16px;
   }
 }
 
@@ -258,6 +262,7 @@ button.secondary:hover:not(:disabled) {
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
+  margin-bottom: 12px;
 }
 
 .muted {
@@ -268,61 +273,172 @@ button.secondary:hover:not(:disabled) {
   color: var(--danger);
 }
 
-.metrics {
+.card-eyebrow {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 20px 0;
+  gap: 8px;
+  align-items: baseline;
+  margin: 0;
+  font-size: 11px;
 }
 
-.metric {
-  font-size: 15px;
-  font-family: var(--serif);
-  padding: 10px 14px;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  min-width: 104px;
+.card-rank {
+  color: var(--accent);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.metric strong {
-  display: block;
+.card-title {
+  margin: 4px 0 0;
+  font-size: 19px;
+  line-height: 1.3;
+}
+
+.card.hero .card-title {
+  font-size: 24px;
+}
+
+button.card-toggle {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+button.card-toggle:hover:not(:disabled) {
+  transform: none;
+  color: var(--accent);
+}
+
+button.card-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.card-toggle-icon {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 0.45em;
+  border-right: 2px solid var(--ink-faint);
+  border-bottom: 2px solid var(--ink-faint);
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.card-toggle[aria-expanded="true"] .card-toggle-icon {
+  transform: rotate(-135deg);
+  margin-top: 0.7em;
+}
+
+.card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+}
+
+.card-chips li {
+  font-size: 12px;
+  color: var(--ink-faint);
+  padding: 3px 10px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-chips strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.card-hypothesis {
+  margin: 14px 0 0;
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.card-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 16px;
+  border-bottom: 1px solid var(--rule);
+  overflow-x: auto;
+}
+
+.card-tabs button {
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  background: none;
+  color: var(--ink-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+
+.card-tabs button:hover:not(:disabled) {
+  transform: none;
+  color: var(--ink);
+}
+
+.card-tabs button[aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.card-panel {
+  padding-top: 14px;
+}
+
+.card-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px 20px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+
+.card-facts dt,
+.experiment dt {
   font-size: 11px;
-  font-family: var(--sans);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-faint);
   font-weight: 500;
-  margin-bottom: 2px;
 }
 
-.evidence-split {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  margin-top: 20px;
+.card-facts dd {
+  margin: 0 0 10px;
 }
 
-@media (min-width: 640px) {
-  .evidence-split {
-    grid-template-columns: 1fr 1fr;
+@media (min-width: 720px) {
+  .card-facts {
+    grid-template-columns: 170px 1fr;
+  }
+  .card-facts dt {
+    padding-top: 3px;
   }
 }
 
-.evidence-split > div {
-  padding: 14px 16px;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  color: var(--ink-dim);
-  min-width: 0;
-}
-
-.evidence-split > div strong {
-  display: block;
-  color: var(--ink);
+.card-fact-label {
+  color: var(--ink-faint);
   font-weight: 500;
-  margin-bottom: 4px;
 }
 
 details summary {
@@ -335,53 +451,32 @@ details summary::marker {
   color: var(--accent);
 }
 
-/* Opportunity Card detail (components/opportunity-card.tsx) */
-.why-it-matters {
-  margin-top: 18px;
-  font-size: 15px;
-  color: var(--ink-dim);
-}
-
-.why-it-matters strong,
-.experiment dt {
-  display: block;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-faint);
-  font-weight: 500;
-  margin-bottom: 4px;
-}
-
 .experiment {
-  margin: 12px 0 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px 20px;
+  margin: 0;
   font-size: 14px;
   color: var(--ink-dim);
 }
 
 .experiment dd {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
 }
 
-.rationale {
-  margin-top: -8px;
-  font-size: 13px;
-  color: var(--ink-dim);
-}
-
-.rationale p {
-  margin: 0 0 4px;
-}
-
-.rationale span {
-  color: var(--ink-faint);
-  font-weight: 500;
+@media (min-width: 720px) {
+  .experiment {
+    grid-template-columns: 170px 1fr;
+  }
+  .experiment dt {
+    padding-top: 3px;
+  }
 }
 
 .evidence-list {
   list-style: none;
   padding: 0;
-  margin: 12px 0 0;
+  margin: 0;
   font-size: 14px;
   color: var(--ink-dim);
 }
@@ -427,17 +522,25 @@ details summary::marker {
 
 /* Card actions: "Build this" + contract §4 rating chips */
 .card-actions {
-  margin-top: 24px;
-  padding-top: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin-top: 16px;
+  padding-top: 16px;
   border-top: 1px solid var(--rule);
+}
+
+/* Errors and the brief take the full row under the button and ratings. */
+.card-actions > :not(button):not(.feedback) {
+  flex-basis: 100%;
 }
 
 .feedback {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 16px;
+  gap: 6px;
 }
 
 .feedback-prompt {
@@ -694,7 +797,7 @@ button.compact {
 
 /* "Build this" implementation brief (components/action-package-panel.tsx) */
 .package-panel {
-  margin-top: 20px;
+  margin-top: 4px;
   padding: 20px 22px;
   background: var(--surface-2);
   border-radius: var(--radius-sm);
@@ -756,8 +859,29 @@ button.compact {
   overflow-wrap: anywhere;
 }
 
+.package-summary {
+  margin-top: 14px;
+}
+
+/* The rest of a brief, one click away (components/action-package-panel.tsx). */
+.brief-more {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.brief-more > summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.brief-more .package-sections {
+  margin-top: 4px;
+}
+
 .package-repo {
-  margin-top: 20px;
+  margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--rule);
   font-size: 13px;
@@ -1370,4 +1494,25 @@ button.site-nav-toggle:hover:not(:disabled) {
   .package-sections dt:first-child {
     margin-top: 0;
   }
+}
+
+/* Repo-aware score changes (components/repo-brief-panel.tsx): chips on the brief's tinted panel. */
+.repo-brief .repo-deltas {
+  padding: 0;
+  margin: 12px 0 0;
+}
+
+.repo-deltas li {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+}
+
+.repo-deltas s {
+  color: var(--ink-faint);
+}
+
+.card-chips li.chip-ready {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }

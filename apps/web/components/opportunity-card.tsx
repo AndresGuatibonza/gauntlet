@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * One Opportunity Card, rendered per PRD §8.5's report structure:
  * observation -> why it matters -> hypothesis -> proposed experiment ->
@@ -13,10 +15,16 @@
  * the reader sees the actual excerpt and source page behind each claim --
  * the thing that makes a recommendation defensible rather than generic.
  *
+ * Layout is compact so a report reads as a ranked list first: the header
+ * (rank, change surface, title, score chips) is always visible; the body
+ * (hypothesis, then Summary / Evidence / Experiment tabs, then actions) is
+ * expanded on the hero only and toggled from the title on the others.
+ *
  * Actions (optional, so the card stays a plain presentational component):
  * the PRD's primary "Build this" CTA and the contract §4 five-point
  * rating. The component only reports clicks; the page owns sending them.
  */
+import { useId, useState } from "react";
 import type { ChangeSurface, EvidenceItem, OpportunityCard } from "@gauntlet/core";
 import { CARD_RATINGS, CARD_RATING_LABEL, type CardRating } from "@/lib/events";
 
@@ -66,116 +74,155 @@ export interface CardActions {
   buildBusy?: boolean;
   /** Rendered under the actions: the "Build this" implementation brief, once requested. */
   packageSlot?: React.ReactNode;
-  /** The visitor opened a collapsed section (not fired for one already open). */
+  /** The visitor switched to the Evidence or Experiment tab (not fired for the tab already shown). */
   onSectionOpened: (section: CardSection) => void;
 }
+
+const LEVEL_LABEL: Record<string, string> = { low: "Low", medium: "Medium", high: "High" };
+
+type CardTab = "summary" | "evidence" | "experiment";
 
 export function OpportunityCardView({
   card,
   isHero,
+  rank,
   evidenceById,
   actions,
+  briefReady,
 }: {
   card: OpportunityCard;
   isHero?: boolean;
+  /** Position in the report (1 = the hero), shown before the change surface. */
+  rank?: number;
   evidenceById: ReadonlyMap<string, EvidenceItem>;
   actions?: CardActions;
+  /** An implementation brief already exists: flagged in the header so a collapsed card shows it. */
+  briefReady?: boolean;
 }): React.JSX.Element {
-  // Fires on the click that OPENS a section, read before the browser toggles
-  // it. Deliberately not the <details> "toggle" event: that also fires for a
-  // section rendered open (the hero's Evidence), which nobody opened.
-  function openHandler(section: CardSection) {
-    return (e: React.MouseEvent<HTMLElement>): void => {
-      const details = e.currentTarget.parentElement;
-      if (actions && details instanceof HTMLDetailsElement && !details.open) actions.onSectionOpened(section);
-    };
+  // Only the hero starts expanded: the rest read as a ranked list of
+  // titles and scores until the visitor opens one. Collapsed bodies stay
+  // mounted (hidden), so a brief being written keeps polling.
+  const [expanded, setExpanded] = useState(Boolean(isHero));
+  const [tab, setTab] = useState<CardTab>("summary");
+  const baseId = useId();
+  const bodyId = `${baseId}-body`;
+  const tabs: { id: CardTab; label: string }[] = [
+    { id: "summary", label: "Summary" },
+    { id: "evidence", label: `Evidence (${card.evidenceRefs.length})` },
+    { id: "experiment", label: "Experiment" },
+  ];
+
+  function selectTab(next: CardTab): void {
+    if (next === tab) return;
+    // Evidence and Experiment were collapsed sections before tabs; their
+    // first view is still what the funnel events record.
+    if (next !== "summary") actions?.onSectionOpened(next);
+    setTab(next);
+  }
+
+  function onTabKey(e: React.KeyboardEvent<HTMLButtonElement>): void {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const at = tabs.findIndex((t) => t.id === tab);
+    const next = tabs[(at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length]!;
+    selectTab(next.id);
+    document.getElementById(`${baseId}-tab-${next.id}`)?.focus();
   }
 
   return (
-    <div className={isHero ? "card hero" : "card"}>
+    <article className={isHero ? "card hero" : "card"} data-expanded={expanded}>
       {isHero && <span className="badge">Best next experiment</span>}
-      <p className="eyebrow" style={{ marginTop: isHero ? 16 : 0 }}>
+      <p className="eyebrow card-eyebrow">
+        {rank !== undefined && <span className="card-rank">#{rank}</span>}
         {CHANGE_SURFACE_LABEL[card.changeSurface]}
       </p>
-      <h2 style={{ fontSize: isHero ? 28 : 22, marginTop: 6 }}>{card.title}</h2>
-      <p className="muted" style={{ marginTop: 10 }}>{card.hypothesis}</p>
+      <h2 className="card-title">
+        <button type="button" className="card-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded((o) => !o)}>
+          <span>{card.title}</span>
+          <span className="card-toggle-icon" aria-hidden="true" />
+        </button>
+      </h2>
+      <ul className="card-chips" aria-label="Scores">
+        <li>
+          Impact <strong>{LEVEL_LABEL[card.expectedImpact.level] ?? card.expectedImpact.level}</strong>
+        </li>
+        <li>
+          Effort <strong>{LEVEL_LABEL[card.effort.level] ?? card.effort.level}</strong>
+        </li>
+        <li>
+          Confidence <strong>{LEVEL_LABEL[card.confidence.level] ?? card.confidence.level}</strong>
+        </li>
+        <li>
+          Evidence <strong>{card.confidence.evidenceQualityScore}/3</strong>
+        </li>
+        {briefReady && <li className="chip-ready">Brief ready</li>}
+      </ul>
 
-      <div className="why-it-matters">
-        <strong>Why it matters</strong>
-        {card.problemStatement}
-      </div>
+      <div id={bodyId} className="card-body" hidden={!expanded}>
+        <p className="card-hypothesis">{card.hypothesis}</p>
 
-      <div className="metrics">
-        <div className="metric">
-          <strong>Impact</strong>
-          {card.expectedImpact.level}
-        </div>
-        <div className="metric">
-          <strong>Effort</strong>
-          {card.effort.level}
-        </div>
-        <div className="metric">
-          <strong>Confidence</strong>
-          {card.confidence.level}
-        </div>
-        <div className="metric">
-          <strong>Evidence quality</strong>
-          {card.confidence.evidenceQualityScore}/3
-        </div>
-      </div>
-      <div className="rationale">
-        <p>
-          <span>Impact:</span> {card.expectedImpact.rationale}
-        </p>
-        <p>
-          <span>Effort:</span> {card.effort.explanation}
-        </p>
-      </div>
-
-      <div className="evidence-split">
-        <div>
-          <strong>What Gauntlet can see from the public surface</strong>
-          {card.observation}
-        </div>
-        <div>
-          <strong>What connecting repo/analytics data would confirm</strong>
-          {card.missingEvidence}
-        </div>
-      </div>
-
-      <details style={{ marginTop: 16 }} open={isHero}>
-        <summary style={{ cursor: "pointer" }} onClick={openHandler("evidence")}>
-          Evidence ({card.evidenceRefs.length})
-        </summary>
-        <ol className="evidence-list">
-          {card.evidenceRefs.map((ref) => (
-            <EvidenceEntry key={ref} refId={ref} item={evidenceById.get(ref)} />
+        <div className="card-tabs" role="tablist" aria-label="Opportunity details">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              id={`${baseId}-tab-${t.id}`}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              aria-controls={`${baseId}-panel-${t.id}`}
+              tabIndex={tab === t.id ? 0 : -1}
+              onClick={() => selectTab(t.id)}
+              onKeyDown={onTabKey}
+            >
+              {t.label}
+            </button>
           ))}
-        </ol>
-      </details>
+        </div>
 
-      <details style={{ marginTop: 12 }}>
-        <summary style={{ cursor: "pointer" }} onClick={openHandler("experiment")}>
-          Proposed experiment
-        </summary>
-        <dl className="experiment">
-          <dt>Control</dt>
-          <dd>{card.experiment.control}</dd>
-          <dt>Variant</dt>
-          <dd>{card.experiment.variant}</dd>
-          <dt>Audience</dt>
-          <dd>{card.experiment.audience}</dd>
-          <dt>Primary metric</dt>
-          <dd>{card.experiment.primaryMetric}</dd>
-          <dt>Guardrails</dt>
-          <dd>{card.experiment.guardrails}</dd>
-          <dt>Stopping rule</dt>
-          <dd>{card.experiment.stoppingRule}</dd>
-        </dl>
-      </details>
+        <div id={`${baseId}-panel-summary`} role="tabpanel" aria-labelledby={`${baseId}-tab-summary`} hidden={tab !== "summary"} className="card-panel">
+          <dl className="card-facts">
+            <dt>Why it matters</dt>
+            <dd>{card.problemStatement}</dd>
+            <dt>Seen on the public surface</dt>
+            <dd>{card.observation}</dd>
+            <dt>Repo or analytics data would confirm</dt>
+            <dd>{card.missingEvidence}</dd>
+            <dt>Scores</dt>
+            <dd>
+              <span className="card-fact-label">Impact:</span> {card.expectedImpact.rationale}{" "}
+              <span className="card-fact-label">Effort:</span> {card.effort.explanation}
+            </dd>
+          </dl>
+        </div>
 
-      {actions && <CardActionsRow actions={actions} isHero={isHero} />}
-    </div>
+        <div id={`${baseId}-panel-evidence`} role="tabpanel" aria-labelledby={`${baseId}-tab-evidence`} hidden={tab !== "evidence"} className="card-panel">
+          <ol className="evidence-list">
+            {card.evidenceRefs.map((ref) => (
+              <EvidenceEntry key={ref} refId={ref} item={evidenceById.get(ref)} />
+            ))}
+          </ol>
+        </div>
+
+        <div id={`${baseId}-panel-experiment`} role="tabpanel" aria-labelledby={`${baseId}-tab-experiment`} hidden={tab !== "experiment"} className="card-panel">
+          <dl className="experiment">
+            <dt>Control</dt>
+            <dd>{card.experiment.control}</dd>
+            <dt>Variant</dt>
+            <dd>{card.experiment.variant}</dd>
+            <dt>Audience</dt>
+            <dd>{card.experiment.audience}</dd>
+            <dt>Primary metric</dt>
+            <dd>{card.experiment.primaryMetric}</dd>
+            <dt>Guardrails</dt>
+            <dd>{card.experiment.guardrails}</dd>
+            <dt>Stopping rule</dt>
+            <dd>{card.experiment.stoppingRule}</dd>
+          </dl>
+        </div>
+
+        {actions && <CardActionsRow actions={actions} isHero={isHero} />}
+      </div>
+    </article>
   );
 }
 
@@ -205,7 +252,7 @@ function CardActionsRow({ actions, isHero }: { actions: CardActions; isHero?: bo
         ))}
       </div>
       {actions.feedbackError && (
-        <p className="error" role="alert" style={{ fontSize: 13, margin: "8px 0 0" }}>
+        <p className="error" role="alert" style={{ fontSize: 13, margin: 0 }}>
           {actions.feedbackError}
         </p>
       )}

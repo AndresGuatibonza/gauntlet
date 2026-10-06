@@ -74,7 +74,9 @@ export function ActionPackagePanel({
 }
 
 /**
- * One implementation brief: copy/download actions and its sections. Shared
+ * One implementation brief: the objective, flag and where to change it,
+ * copy/download actions, then the full plan folded under "Full brief"
+ * (the copied prompt and the download always carry all of it). Shared
  * by the public brief and the repo-aware one (repo-brief-panel.tsx); what
  * follows the sections (repository context) is the caller's `children`.
  */
@@ -133,52 +135,58 @@ export function BriefDetails({
         </p>
       )}
 
-      <dl className="package-sections">
+      <dl className="package-sections package-summary">
         <dt>Feature flag</dt>
         <dd>
           <code>{pkg.featureFlag.name}</code>, off by default. {pkg.featureFlag.rollout}
-        </dd>
-        <dt>Approach</dt>
-        <dd>
-          <ol>{pkg.approach.map((s) => <li key={s}>{s}</li>)}</ol>
-        </dd>
-        <dt>Done when</dt>
-        <dd>
-          <ul>{pkg.acceptanceCriteria.map((s) => <li key={s}>{s}</li>)}</ul>
-        </dd>
-        <dt>Measure</dt>
-        <dd>
-          <p className="package-line">{pkg.measurement.howToMeasure}</p>
-          <p className="package-line">
-            <span className="muted">Baseline:</span> {pkg.measurement.baseline}
-          </p>
-          <p className="package-line">
-            <span className="muted">Minimum duration:</span> {pkg.measurement.minimumDuration}
-          </p>
-        </dd>
-        <dt>Roll back if</dt>
-        <dd>
-          <ul>{pkg.rollbackCriteria.map((s) => <li key={s}>{s}</li>)}</ul>
-        </dd>
-        <dt>Not in scope</dt>
-        <dd>
-          <ul>{pkg.nonGoals.map((s) => <li key={s}>{s}</li>)}</ul>
-        </dd>
-        <dt>Risks</dt>
-        <dd>
-          <ul>
-            {pkg.risks.map((r) => (
-              <li key={r.risk}>
-                {r.risk} <span className="muted">Mitigation: {r.mitigation}</span>
-              </li>
-            ))}
-          </ul>
         </dd>
         <dt>{componentsLabel}</dt>
         <dd>
           <ul>{pkg.likelyComponents.map((s) => <li key={s}>{s}</li>)}</ul>
         </dd>
       </dl>
+
+      <details className="brief-more">
+        <summary>Full brief: approach, done when, measurement, rollback, scope and risks</summary>
+        <dl className="package-sections">
+          <dt>Approach</dt>
+          <dd>
+            <ol>{pkg.approach.map((s) => <li key={s}>{s}</li>)}</ol>
+          </dd>
+          <dt>Done when</dt>
+          <dd>
+            <ul>{pkg.acceptanceCriteria.map((s) => <li key={s}>{s}</li>)}</ul>
+          </dd>
+          <dt>Measure</dt>
+          <dd>
+            <p className="package-line">{pkg.measurement.howToMeasure}</p>
+            <p className="package-line">
+              <span className="muted">Baseline:</span> {pkg.measurement.baseline}
+            </p>
+            <p className="package-line">
+              <span className="muted">Minimum duration:</span> {pkg.measurement.minimumDuration}
+            </p>
+          </dd>
+          <dt>Roll back if</dt>
+          <dd>
+            <ul>{pkg.rollbackCriteria.map((s) => <li key={s}>{s}</li>)}</ul>
+          </dd>
+          <dt>Not in scope</dt>
+          <dd>
+            <ul>{pkg.nonGoals.map((s) => <li key={s}>{s}</li>)}</ul>
+          </dd>
+          <dt>Risks</dt>
+          <dd>
+            <ul>
+              {pkg.risks.map((r) => (
+                <li key={r.risk}>
+                  {r.risk} <span className="muted">Mitigation: {r.mitigation}</span>
+                </li>
+              ))}
+            </ul>
+          </dd>
+        </dl>
+      </details>
 
       {children}
     </>

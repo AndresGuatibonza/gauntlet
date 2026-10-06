@@ -55,6 +55,30 @@ function fakePackage(): ActionPackage {
   };
 }
 
+describe("listActionPackages", () => {
+  it("returns every card's brief state for one report, in card order, and nothing for others", async () => {
+    const scan = await doneScan();
+    const other = await doneScan();
+    expect(await store.listActionPackages(scan)).toEqual([]);
+
+    const c2 = await store.claimActionPackage(scan, 2, "a".repeat(64), LIMITS);
+    const c0 = await store.claimActionPackage(scan, 0, "a".repeat(64), LIMITS);
+    await store.claimActionPackage(other, 1, "a".repeat(64), LIMITS);
+    if (c0.outcome !== "start" || c2.outcome !== "start") throw new Error("expected new claims");
+    await store.completeActionPackage(c0.id, fakePackage(), planExperimentRecord(fakePackage()));
+
+    const listed = await store.listActionPackages(scan);
+    expect(listed.map((p) => [p.cardIndex, p.state.state])).toEqual([
+      [0, "ready"],
+      [2, "generating"],
+    ]);
+    expect(listed[0]!.state).toMatchObject({ state: "ready", package: { featureFlag: { name: "signup_price" } } });
+
+    await sql.query(`update action_packages set updated_at = now() - interval '1 hour' where id = $1`, [c2.id]);
+    expect((await store.listActionPackages(scan))[1]!.state).toMatchObject({ state: "failed", canRetry: true });
+  });
+});
+
 describe("claimActionPackage", () => {
   it("resolves concurrent clicks to exactly one generation", async () => {
     const scan = await doneScan();

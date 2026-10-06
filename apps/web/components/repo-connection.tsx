@@ -8,16 +8,19 @@
  */
 import { useEffect, useState } from "react";
 import type { UseRepository } from "@/lib/use-repository";
-import { RepoBriefPanel } from "@/components/repo-brief-panel";
+import { RepoBriefPanel, type PublicLevels } from "@/components/repo-brief-panel";
 
 export function RepoConnection({
   scanId,
   cardIndex,
   repo,
+  publicLevels,
 }: {
   scanId: string;
   cardIndex: number;
   repo: UseRepository;
+  /** The card's public-scan confidence and effort, shown against the repo-aware ones. */
+  publicLevels?: PublicLevels;
 }): React.JSX.Element {
   const { connection, busy, actionError, connect, disconnect } = repo;
   const connectHref = `/api/github/connect?scan=${scanId}`;
@@ -39,7 +42,7 @@ export function RepoConnection({
           </button>
         </p>
         {actionError && <p className="error repo-note" role="alert">{actionError}</p>}
-        <RepoBriefPanel key={connected.repositoryId} scanId={scanId} cardIndex={cardIndex} repository={connected.fullName} />
+        <RepoBriefPanel key={connected.repositoryId} scanId={scanId} cardIndex={cardIndex} repository={connected.fullName} publicLevels={publicLevels} />
       </div>
     );
   }

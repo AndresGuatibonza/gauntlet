@@ -407,6 +407,20 @@ export async function getActionPackage(scanJobId: string, cardIndex: number): Pr
   return row ? rowToPackageState(row) : { state: "none" };
 }
 
+/**
+ * Every "Build this" brief a report already has, by card, so reopening the
+ * report shows them without asking again. Cards never built are absent.
+ */
+export async function listActionPackages(scanJobId: string): Promise<{ cardIndex: number; state: ActionPackageState }[]> {
+  const result = await getPool().query<ActionPackageRow & { card_index: number }>(
+    `select id, card_index, status, package, error_message, attempts,
+       (status = 'generating' and updated_at < now() - make_interval(mins => ${STALE_PACKAGE_MINUTES})) as stale
+       from action_packages where scan_job_id = $1 order by card_index`,
+    [scanJobId],
+  );
+  return result.rows.map((row) => ({ cardIndex: row.card_index, state: rowToPackageState(row) }));
+}
+
 export type ClaimActionPackageResult =
   | { outcome: "start"; id: string }
   | { outcome: "existing"; state: Exclude<ActionPackageState, { state: "none" }> }

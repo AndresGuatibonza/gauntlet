@@ -14,10 +14,10 @@
 import { after, NextResponse } from "next/server";
 import { ipAddress } from "@vercel/functions";
 import { z } from "zod";
-import { renderCodingAgentPrompt, renderActionPackageMarkdown, type ActionPackage } from "@gauntlet/core";
 import { claimActionPackage, getActionPackage, getScanJob, type ActionPackageState } from "@/lib/store";
 import { hashClientIp, readIpHashSecret, readPackageLimits } from "@/lib/rate-limit";
 import { runActionPackageJob } from "@/lib/build-package";
+import { packageStateBody } from "@/lib/package-response";
 
 export const maxDuration = 300;
 
@@ -28,21 +28,8 @@ const ParamsSchema = z.object({
 
 type Params = { params: Promise<{ id: string; index: string }> };
 
-function present(pkg: ActionPackage): { package: ActionPackage; codingAgentPrompt: string; markdown: string } {
-  return { package: pkg, codingAgentPrompt: renderCodingAgentPrompt(pkg), markdown: renderActionPackageMarkdown(pkg) };
-}
-
 function stateResponse(state: ActionPackageState): Response {
-  switch (state.state) {
-    case "ready":
-      return NextResponse.json({ status: "ready", ...present(state.package) });
-    case "generating":
-      return NextResponse.json({ status: "generating" }, { status: 202 });
-    case "failed":
-      return NextResponse.json({ status: "failed", error: state.errorMessage, canRetry: state.canRetry });
-    case "none":
-      return NextResponse.json({ status: "none" });
-  }
+  return NextResponse.json(packageStateBody(state), { status: state.state === "generating" ? 202 : 200 });
 }
 
 /** Shared checks: valid ids, finished report, existing card. */

@@ -49,6 +49,18 @@ describe("ActionPackagePanel", () => {
     expect(getByText("Connect your repository").getAttribute("href")).toBe("/signup?from=j&card=0");
   });
 
+  it("leads with the objective, flag and where to change it, and folds the full plan", () => {
+    const { container, getByText } = render(<ActionPackagePanel view={ready} onRetry={vi.fn()} connectRepoHref="/signup" />);
+    const summary = container.querySelector(".package-summary") as HTMLElement;
+    expect(summary.textContent).toContain("hero_price");
+    expect(summary.textContent).toContain("the homepage hero");
+    const more = container.querySelector("details.brief-more") as HTMLDetailsElement;
+    expect(more.open).toBe(false);
+    expect(more.contains(getByText("Read the price from the pricing source"))).toBe(true);
+    expect(more.contains(getByText("Signups drop more than 5%"))).toBe(true);
+    expect(more.contains(getByText("Stale price", { exact: false }))).toBe(true);
+  });
+
   it("copies the coding-agent prompt, and explains the fallback when copying is blocked", async () => {
     const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("denied"));
     Object.assign(navigator, { clipboard: { writeText } });

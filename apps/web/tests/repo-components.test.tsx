@@ -104,6 +104,29 @@ describe("RepoBriefPanel", () => {
     expect(getByText("What this targeted read could not settle:")).toBeTruthy();
   });
 
+  it("leads with how the code moved the card's confidence and effort", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply(ready())));
+    const { findByRole, container } = render(
+      <RepoBriefPanel scanId="s1" cardIndex={0} repository="acme/web" publicLevels={{ confidence: "medium", effort: "low" }} />,
+    );
+    const deltas = await findByRole("list", { name: "Revised scores" });
+    const items = Array.from(deltas.querySelectorAll("li")).map((li) => li.textContent);
+    expect(items).toEqual(["Confidence Medium → High", "Effort Low (unchanged)"]);
+    expect(deltas.querySelector("s")!.textContent).toBe("Medium");
+    const more = Array.from(container.querySelectorAll("details")).find((d) => d.textContent!.includes("Running it here"))!;
+    expect(more.open).toBe(false);
+    expect(more.textContent).toContain("Reuse posthog-js flags.");
+    expect(more.textContent).toContain("Current flag rollout.");
+  });
+
+  it("shows only the repo-aware level when the public one is unknown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply(ready())));
+    const { findByRole } = render(<RepoBriefPanel scanId="s1" cardIndex={0} repository="acme/web" />);
+    const deltas = await findByRole("list", { name: "Revised scores" });
+    expect(Array.from(deltas.querySelectorAll("li")).map((li) => li.textContent)).toEqual(["Confidence High", "Effort Low"]);
+    expect(deltas.querySelector("s")).toBeNull();
+  });
+
   it("shows an existing failure with a retry that starts again", async () => {
     const fetchMock = vi
       .fn()
