@@ -10,6 +10,8 @@ const claimActionPackage = vi.fn();
 const getActionPackage = vi.fn();
 vi.mock("@/lib/store", () => ({ getScanJob, claimActionPackage, getActionPackage }));
 vi.mock("@/lib/build-package", () => ({ runActionPackageJob: vi.fn() }));
+const getSessionUser = vi.fn(async (): Promise<{ id: string } | null> => null);
+vi.mock("@/lib/auth/server", () => ({ getSessionUser }));
 
 const ID = "3f2a1c4e-9b7d-4e21-8a6f-0c5d2e7b9a10";
 const doneJob = { id: ID, status: "done", opportunityReport: { cards: [{ title: "a" }, { title: "b" }] } };
@@ -35,7 +37,29 @@ describe("POST /api/scans/:id/cards/:index/package", () => {
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ status: "generating" });
     expect(after).toHaveBeenCalledTimes(1);
-    expect(claimActionPackage).toHaveBeenCalledWith(ID, 1, expect.stringMatching(/^[0-9a-f]{64}$/), { perClient: 5, global: 40 });
+    expect(claimActionPackage).toHaveBeenCalledWith(
+      ID,
+      1,
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      { perClient: 5, global: 40 },
+      expect.stringMatching(/^ip:[0-9a-f]{64}$/),
+    );
+  });
+
+  it("counts a signed-in visitor's brief against their account, with the account allowance", async () => {
+    getSessionUser.mockResolvedValueOnce({ id: "user-1" });
+    claimActionPackage.mockResolvedValue({ outcome: "start", id: "pkg-1" });
+    await call("POST");
+    expect(claimActionPackage).toHaveBeenCalledWith(ID, 1, expect.any(String), { perClient: 10, global: 40 }, "user:user-1");
+  });
+
+  it("adds the sign-in hint to an anonymous visitor's own limit only when accounts exist", async () => {
+    const denied = { outcome: "denied", denial: { allowed: false, scope: "client", retryAfterSeconds: 60, message: "You've reached the limit." } };
+    claimActionPackage.mockResolvedValue(denied);
+    expect((await (await call("POST")).json()).error).toBe("You've reached the limit.");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_x");
+    expect((await (await call("POST")).json()).error).toBe("You've reached the limit. Signing in with GitHub raises your daily limit.");
   });
 
   it("returns an existing package without generating again", async () => {

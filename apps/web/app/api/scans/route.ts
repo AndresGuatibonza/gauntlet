@@ -22,7 +22,9 @@ import { NextResponse, after } from "next/server";
 import { ipAddress } from "@vercel/functions";
 import { z } from "zod";
 import { createScanJobWithinQuota } from "@/lib/store";
-import { hashClientIp, readIpHashSecret, readScanLimits, type ScanLimits } from "@/lib/rate-limit";
+import { hashClientIp, limitsFor, quotaSubject, readIpHashSecret, readScanLimits, withSignInHint, type QuotaLimits } from "@/lib/rate-limit";
+import { getSessionUser } from "@/lib/auth/server";
+import { readAuthConfig } from "@/lib/auth/config";
 import { runScanJob } from "@/lib/run-scan";
 import { newClaimToken } from "@/lib/accounts";
 
@@ -52,7 +54,7 @@ export async function POST(request: Request): Promise<Response> {
   // closed with a 500 rather than running scans with no limit at all. The
   // detail (which env var) goes to the server log only -- this endpoint is
   // public, and env var names are not something to hand to any visitor.
-  let limits: ScanLimits;
+  let limits: QuotaLimits;
   let clientIpHash: string;
   try {
     limits = readScanLimits();
@@ -69,10 +71,21 @@ export async function POST(request: Request): Promise<Response> {
   let claim: ReturnType<typeof newClaimToken>;
   try {
     claim = newClaimToken();
-    const result = await createScanJobWithinQuota(parsed.data.url, parsed.data.category, clientIpHash, limits, claim.hash);
+    // Signed in: counted per account; otherwise per client IP. A failed
+    // session read is "signed out" (getSessionUser never throws).
+    const user = await getSessionUser();
+    const subject = quotaSubject(user?.id, clientIpHash);
+    const result = await createScanJobWithinQuota(
+      parsed.data.url,
+      parsed.data.category,
+      clientIpHash,
+      limitsFor(subject, limits),
+      claim.hash,
+      subject.key,
+    );
     if (!result.ok) {
       return NextResponse.json(
-        { error: result.denial.message },
+        { error: withSignInHint(result.denial, subject.kind, readAuthConfig() !== null) },
         { status: 429, headers: { "Retry-After": String(result.denial.retryAfterSeconds) } },
       );
     }

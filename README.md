@@ -177,6 +177,12 @@ apps/web/        The public Pre-auth Report UI (Build Order #3). Supabase
     never "unlimited". Local `next dev` has no Vercel edge, so every
     local request shares one "unknown client" bucket -- raise
     `SCAN_LIMIT_PER_CLIENT_PER_DAY` in `.env.local` for local testing.
+    **Signed-in visitors are counted per account instead** (migration
+    `010_quota_subject.sql`; `SCAN_LIMIT_PER_ACCOUNT_PER_DAY`, default 5),
+    so people behind one shared IP don't share an allowance; an anonymous
+    visitor at their limit is told that signing in raises it. The global
+    cap covers both. The same applies to "Build this" briefs
+    (`PACKAGE_LIMIT_PER_ACCOUNT_PER_DAY`, default 10).
   - **Report page shows each card's evidence** (`components/opportunity-card.tsx`):
     every cited id (E1, E3...) resolved against the job's own Evidence
     Packet -- observation, excerpt, source link -- plus every contract
@@ -585,9 +591,11 @@ Deploying to Vercel: import the repo, set the **Root Directory** to
 `apps/web`, add the same three env vars (`DATABASE_URL`,
 `ANTHROPIC_API_KEY`, `SCAN_IP_HASH_SECRET`) plus `CRON_SECRET` (any
 random string of 16+ characters) in Vercel's project settings. Optional:
-`PACKAGE_LIMIT_PER_CLIENT_PER_DAY` (default 5) and
+`PACKAGE_LIMIT_PER_CLIENT_PER_DAY` (default 5),
+`PACKAGE_LIMIT_PER_ACCOUNT_PER_DAY` (default 10) and
 `PACKAGE_LIMIT_GLOBAL_PER_DAY` (default 40) bound "Build this" briefs,
-one Claude call each. **Run
+one Claude call each; `SCAN_LIMIT_PER_ACCOUNT_PER_DAY` (default 5) is the
+signed-in scan allowance. **Run
 `npm run migrate --workspace=web` against Supabase before deploying code
 that needs a new migration.**
 

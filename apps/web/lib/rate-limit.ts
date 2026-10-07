@@ -31,11 +31,21 @@ import { createHmac } from "node:crypto";
 /** Rolling quota window. */
 export const QUOTA_WINDOW_SECONDS = 24 * 60 * 60;
 
-export const DEFAULT_SCAN_LIMITS = { perClient: 3, global: 20 } as const;
+export const DEFAULT_SCAN_LIMITS = { perClient: 3, perAccount: 5, global: 20 } as const;
 
+/** One quota as applied to one request: the requester's own allowance and the product-wide cap. */
 export interface ScanLimits {
   perClient: number;
   global: number;
+}
+
+/**
+ * A quota's configured allowances. Signed-in visitors are counted per
+ * account (perAccount), anonymous ones per client IP (perClient); the
+ * global cap covers both and is the real cost ceiling.
+ */
+export interface QuotaLimits extends ScanLimits {
+  perAccount: number;
 }
 
 /** Misconfiguration of the quota's own env vars -- a server problem, not the visitor's. */
@@ -58,9 +68,10 @@ function parseLimit(env: Env, name: string, fallback: number): number {
   return value;
 }
 
-export function readScanLimits(env: Env = process.env): ScanLimits {
+export function readScanLimits(env: Env = process.env): QuotaLimits {
   return {
     perClient: parseLimit(env, "SCAN_LIMIT_PER_CLIENT_PER_DAY", DEFAULT_SCAN_LIMITS.perClient),
+    perAccount: parseLimit(env, "SCAN_LIMIT_PER_ACCOUNT_PER_DAY", DEFAULT_SCAN_LIMITS.perAccount),
     global: parseLimit(env, "SCAN_LIMIT_GLOBAL_PER_DAY", DEFAULT_SCAN_LIMITS.global),
   };
 }
@@ -69,13 +80,31 @@ export function readScanLimits(env: Env = process.env): ScanLimits {
  * "Build this" implementation packages: one Claude call each, so they get
  * their own, separate daily allowance (PACKAGE_LIMIT_*).
  */
-export const DEFAULT_PACKAGE_LIMITS = { perClient: 5, global: 40 } as const;
+export const DEFAULT_PACKAGE_LIMITS = { perClient: 5, perAccount: 10, global: 40 } as const;
 
-export function readPackageLimits(env: Env = process.env): ScanLimits {
+export function readPackageLimits(env: Env = process.env): QuotaLimits {
   return {
     perClient: parseLimit(env, "PACKAGE_LIMIT_PER_CLIENT_PER_DAY", DEFAULT_PACKAGE_LIMITS.perClient),
+    perAccount: parseLimit(env, "PACKAGE_LIMIT_PER_ACCOUNT_PER_DAY", DEFAULT_PACKAGE_LIMITS.perAccount),
     global: parseLimit(env, "PACKAGE_LIMIT_GLOBAL_PER_DAY", DEFAULT_PACKAGE_LIMITS.global),
   };
+}
+
+/**
+ * Who a scan or brief counts against (stored as quota_subject, migration
+ * 010): the signed-in account when there is one, so people behind a
+ * shared or rotating IP each get their own allowance; otherwise the
+ * client's IP hash. Both are opaque: an account id or an HMAC, never an IP.
+ */
+export type QuotaSubject = { kind: "account"; key: string } | { kind: "client"; key: string };
+
+export function quotaSubject(userId: string | null | undefined, clientIpHash: string): QuotaSubject {
+  return userId ? { kind: "account", key: `user:${userId}` } : { kind: "client", key: `ip:${clientIpHash}` };
+}
+
+/** The allowance that applies to this subject, plus the global cap. */
+export function limitsFor(subject: QuotaSubject, limits: QuotaLimits): ScanLimits {
+  return { perClient: subject.kind === "account" ? limits.perAccount : limits.perClient, global: limits.global };
 }
 
 /**
@@ -199,4 +228,18 @@ export function evaluateScanQuota(input: {
   }
 
   return { allowed: true };
+}
+
+/**
+ * An anonymous visitor who used up their own allowance is told that
+ * signing in raises it -- only when accounts exist and the global cap is
+ * not the reason.
+ */
+export function withSignInHint(
+  denial: { scope: "client" | "global"; message: string },
+  subjectKind: QuotaSubject["kind"],
+  accountsEnabled: boolean,
+): string {
+  if (denial.scope !== "client" || subjectKind !== "client" || !accountsEnabled) return denial.message;
+  return `${denial.message} Signing in with GitHub raises your daily limit.`;
 }

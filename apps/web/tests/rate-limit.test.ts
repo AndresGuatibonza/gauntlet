@@ -9,6 +9,10 @@ import {
   hashClientIp,
   readIpHashSecret,
   readScanLimits,
+  readPackageLimits,
+  quotaSubject,
+  limitsFor,
+  withSignInHint,
   type QuotaUsage,
 } from "@/lib/rate-limit";
 
@@ -22,18 +26,46 @@ function usage(count: number, slotFreesFromCreatedAt: Date | null = null): Quota
 
 describe("readScanLimits", () => {
   it("defaults to the restrictive early-access numbers (3 per client, 20 global)", () => {
-    expect(readScanLimits({})).toEqual({ perClient: 3, global: 20 });
-    expect(DEFAULT_SCAN_LIMITS).toEqual({ perClient: 3, global: 20 });
+    expect(readScanLimits({})).toEqual({ perClient: 3, perAccount: 5, global: 20 });
+    expect(DEFAULT_SCAN_LIMITS).toEqual({ perClient: 3, perAccount: 5, global: 20 });
+    expect(readPackageLimits({})).toEqual({ perClient: 5, perAccount: 10, global: 40 });
   });
 
   it("accepts positive integer overrides", () => {
     expect(
-      readScanLimits({ SCAN_LIMIT_PER_CLIENT_PER_DAY: "5", SCAN_LIMIT_GLOBAL_PER_DAY: " 50 " }),
-    ).toEqual({ perClient: 5, global: 50 });
+      readScanLimits({ SCAN_LIMIT_PER_CLIENT_PER_DAY: "5", SCAN_LIMIT_PER_ACCOUNT_PER_DAY: "8", SCAN_LIMIT_GLOBAL_PER_DAY: " 50 " }),
+    ).toEqual({ perClient: 5, perAccount: 8, global: 50 });
+    expect(readPackageLimits({ PACKAGE_LIMIT_PER_ACCOUNT_PER_DAY: "12" }).perAccount).toBe(12);
   });
 
   it.each(["0", "-1", "2.5", "abc", "1e3x"])("rejects %s instead of silently disabling the limit", (bad) => {
     expect(() => readScanLimits({ SCAN_LIMIT_PER_CLIENT_PER_DAY: bad })).toThrow(RateLimitConfigError);
+    expect(() => readScanLimits({ SCAN_LIMIT_PER_ACCOUNT_PER_DAY: bad })).toThrow(RateLimitConfigError);
+    expect(() => readPackageLimits({ PACKAGE_LIMIT_PER_ACCOUNT_PER_DAY: bad })).toThrow(RateLimitConfigError);
+  });
+});
+
+describe("quota subjects", () => {
+  const HASH = "a".repeat(64);
+  it("counts a signed-in visitor by account and an anonymous one by client IP hash", () => {
+    expect(quotaSubject("2f1c-user", HASH)).toEqual({ kind: "account", key: "user:2f1c-user" });
+    expect(quotaSubject(null, HASH)).toEqual({ kind: "client", key: `ip:${HASH}` });
+    expect(quotaSubject("", HASH)).toEqual({ kind: "client", key: `ip:${HASH}` });
+  });
+
+  it("applies the account allowance to accounts and the client one otherwise; the global cap to both", () => {
+    const limits = { perClient: 3, perAccount: 5, global: 20 };
+    expect(limitsFor(quotaSubject("u", HASH), limits)).toEqual({ perClient: 5, global: 20 });
+    expect(limitsFor(quotaSubject(null, HASH), limits)).toEqual({ perClient: 3, global: 20 });
+  });
+
+  it("tells only an anonymous visitor at their own limit that signing in raises it", () => {
+    const own = { scope: "client" as const, message: "You've reached the scan limit." };
+    const global = { scope: "global" as const, message: "Gauntlet is at capacity." };
+    expect(withSignInHint(own, "client", true)).toBe("You've reached the scan limit. Signing in with GitHub raises your daily limit.");
+    expect(withSignInHint(own, "client", false)).toBe(own.message);
+    expect(withSignInHint(own, "account", true)).toBe(own.message);
+    expect(withSignInHint(global, "client", true)).toBe(global.message);
   });
 });
 

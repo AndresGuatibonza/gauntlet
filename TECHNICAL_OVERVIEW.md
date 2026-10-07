@@ -359,6 +359,11 @@ for an unpriced model), stop reason, duration, `ok`. `scan_job_id` is
 deliberately not a foreign key, so cost history outlives scan retention;
 no prompt or response text, IP or identity is stored.
 
+**`010_quota_subject.sql`**: `quota_subject` on `scan_jobs` and
+`action_packages` (`user:<account id>` when signed in, `ip:<IP HMAC>`
+otherwise, backfilled from `client_ip_hash`); the quota queries count by
+it; cleared with the IP hashes after 48 h.
+
 The README section "Measuring the concierge validation" has the SQL for
 the funnel and for the contract's thresholds (top-3 usefulness, action
 intent, `wrong` ratings as a proxy for false confidence).
@@ -435,10 +440,12 @@ intent, `wrong` ratings as a proxy for false confidence).
 | `DATABASE_URL` | yes | Supabase **transaction pooler** connection string (port 6543). |
 | `ANTHROPIC_API_KEY` | yes | Claude API key. |
 | `SCAN_IP_HASH_SECRET` | yes | Key for hashing client IPs (long random string). |
-| `SCAN_LIMIT_PER_CLIENT_PER_DAY` | no | Default 3. |
+| `SCAN_LIMIT_PER_CLIENT_PER_DAY` | no | Default 3. Anonymous visitors, per client IP. |
+| `SCAN_LIMIT_PER_ACCOUNT_PER_DAY` | no | Default 5. Signed-in visitors, per account. |
 | `SCAN_LIMIT_GLOBAL_PER_DAY` | no | Default 20. |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | no | Turn on accounts (Supabase Auth, GitHub). Public values; never the secret key. Setup steps in the README. |
 | `PACKAGE_LIMIT_PER_CLIENT_PER_DAY` | no | Default 5. Implementation briefs per client per 24 h. |
+| `PACKAGE_LIMIT_PER_ACCOUNT_PER_DAY` | no | Default 10. Implementation briefs per signed-in account per 24 h. |
 | `PACKAGE_LIMIT_GLOBAL_PER_DAY` | no | Default 40. Implementation briefs in total per 24 h. |
 | `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY` | no | Turn on the GitHub deep scan (needs accounts). Server-only secrets. Setup in the README. |
 | `REPO_BRIEF_LIMIT_PER_USER_PER_DAY`, `REPO_BRIEF_LIMIT_GLOBAL_PER_DAY` | no | Defaults 10 and 60. Repo-aware briefs per account and in total per 24 h. |
@@ -453,7 +460,7 @@ intent, `wrong` ratings as a proxy for false confidence).
   before deploying code that needs a new migration.**
 - **Daily maintenance** (`apps/web/vercel.json` cron → `GET
   /api/cron/maintenance`, 07:17 UTC): fails scans stuck in flight past 10
-  minutes, clears client IP hashes (scans and packages) older than 48 h,
+  minutes, clears client IP hashes and quota subjects (scans and packages) older than 48 h,
   and deletes anonymous scans older than `SCAN_RETENTION_DAYS` with their
   events; scans saved to a workspace are kept. Idempotent.
 - **Stuck scans** also end on their own: the polling endpoint fails a scan
@@ -576,17 +583,18 @@ expected to be clean.
    events. Revisit if a shorter window is required.
 3. **Maintenance runs once a day** (Vercel Hobby cron limit). Stuck scans
    don't depend on it (the polling endpoint ends them), but the purge does.
-4. **IP-based quota**: shared IPs share a quota and IPv6 rotation can
-   partly evade the per-client limit; the global daily cap is the real
-   cost ceiling. Move to per-account quotas once authentication exists.
+4. **Quotas**: signed-in visitors are counted per account (migration
+   010); anonymous visitors still per IP, so for them shared IPs share a
+   quota and IPv6 rotation can partly evade the limit. Several GitHub
+   accounts get several allowances. The global daily cap is the real cost
+   ceiling for all of it.
 5. **Scan coverage**: static HTML only, so JavaScript-rendered sites yield
    little evidence and bot-blocking sites fail with a clear message.
    Mature products often get 2–3 cards rather than 5.
 6. **300 s function limit** (Vercel Hobby): a run that needs both
    corrective retries could approach it; move to Pro (800 s) only if a real
    run shows it.
-7. **Accounts are GitHub-only** and quotas are still per IP, not per
-   account. A report can only be saved from the browser that ran it
+7. **Accounts are GitHub-only**. A report can only be saved from the browser that ran it
    (scans created before accounts existed can't be saved).
 8. **GitHub deep scan scope**: GitHub only; the default branch at the time
    of the request; at most 12 files (≤800 lines, ≤60 KB each) per card, so

@@ -82,9 +82,10 @@ function rowToJob(row: ScanJobRow): ScanJob {
 const SCAN_QUOTA_LOCK_KEY = 7254001; // arbitrary, only needs to be unique within this database
 
 /**
- * Rolling-window usage of one quota-bearing table: per-client count, global
- * count, and when a slot frees in each. The table name is a closed union,
- * never user input.
+ * Rolling-window usage of one quota-bearing table: the requester's count
+ * (by quota_subject: an account or a client IP hash, see rate-limit.ts),
+ * the global count, and when a slot frees in each. The table name is a
+ * closed union, never user input.
  */
 function quotaUsageSql(table: "scan_jobs" | "action_packages"): string {
   return `
@@ -92,9 +93,9 @@ function quotaUsageSql(table: "scan_jobs" | "action_packages"): string {
   select
     now() as now,
     (select count(*)::int from ${table}, win
-      where client_ip_hash = $1 and created_at > win.since) as client_count,
+      where quota_subject = $1 and created_at > win.since) as client_count,
     (select created_at from ${table}, win
-      where client_ip_hash = $1 and created_at > win.since
+      where quota_subject = $1 and created_at > win.since
       order by created_at desc offset ($2::int - 1) limit 1) as client_slot_frees_from,
     (select count(*)::int from ${table}, win
       where created_at > win.since) as global_count,
@@ -122,6 +123,8 @@ export async function createScanJobWithinQuota(
   limits: ScanLimits,
   /** SHA-256 of the claim token handed to the browser (lib/accounts.ts). */
   claimTokenHash: string | null = null,
+  /** Who the scan counts against (rate-limit.ts quotaSubject); defaults to the client IP. */
+  quotaSubject: string = `ip:${clientIpHash}`,
 ): Promise<CreateScanJobResult> {
   const client = await getPool().connect();
   try {
@@ -129,7 +132,7 @@ export async function createScanJobWithinQuota(
     await client.query("select pg_advisory_xact_lock($1)", [SCAN_QUOTA_LOCK_KEY]);
 
     const usage = await client.query<QuotaUsageRow>(quotaUsageSql("scan_jobs"), [
-      clientIpHash,
+      quotaSubject,
       limits.perClient,
       limits.global,
       QUOTA_WINDOW_SECONDS,
@@ -152,9 +155,9 @@ export async function createScanJobWithinQuota(
     }
 
     const inserted = await client.query<{ id: string }>(
-      `insert into scan_jobs (url, category, status, client_ip_hash, claim_token_hash)
-       values ($1, $2, 'queued', $3, $4) returning id`,
-      [url, category, clientIpHash, claimTokenHash],
+      `insert into scan_jobs (url, category, status, client_ip_hash, claim_token_hash, quota_subject)
+       values ($1, $2, 'queued', $3, $4, $5) returning id`,
+      [url, category, clientIpHash, claimTokenHash, quotaSubject],
     );
     const id = inserted.rows[0]?.id;
     if (!id) {
@@ -324,8 +327,8 @@ export interface RetentionPolicy {
 
 /**
  * Data retention (PRD §18 open question; policy in TECHNICAL_OVERVIEW.md). One
- * transaction: clear client IP hashes on scan_jobs and action_packages once
- * their quotas no longer need them, then delete scans past the retention
+ * transaction: clear client IP hashes and quota subjects on scan_jobs and
+ * action_packages once their quotas no longer need them, then delete scans past the retention
  * period (packages and ledger records cascade with them). scan_events rows
  * go with their scan (on delete cascade); their own client hash is kept
  * until then because it is part of the per-client dedupe key.
@@ -335,13 +338,13 @@ export async function purgeExpiredData(policy: RetentionPolicy): Promise<{ ipHas
   try {
     await client.query("begin");
     const cleared = await client.query(
-      `update scan_jobs set client_ip_hash = null
-        where client_ip_hash is not null and created_at < now() - make_interval(hours => $1)`,
+      `update scan_jobs set client_ip_hash = null, quota_subject = null
+        where (client_ip_hash is not null or quota_subject is not null) and created_at < now() - make_interval(hours => $1)`,
       [policy.ipHashHours],
     );
     const clearedPackages = await client.query(
-      `update action_packages set client_ip_hash = null
-        where client_ip_hash is not null and created_at < now() - make_interval(hours => $1)`,
+      `update action_packages set client_ip_hash = null, quota_subject = null
+        where (client_ip_hash is not null or quota_subject is not null) and created_at < now() - make_interval(hours => $1)`,
       [policy.ipHashHours],
     );
     // Anonymous scans only: a scan saved to an account's workspace is kept.
@@ -439,6 +442,8 @@ export async function claimActionPackage(
   cardIndex: number,
   clientIpHash: string,
   limits: ScanLimits,
+  /** Who the brief counts against (rate-limit.ts quotaSubject); defaults to the client IP. */
+  quotaSubject: string = `ip:${clientIpHash}`,
 ): Promise<ClaimActionPackageResult> {
   const client = await getPool().connect();
   try {
@@ -462,7 +467,7 @@ export async function claimActionPackage(
     }
 
     const usage = await client.query<QuotaUsageRow>(quotaUsageSql("action_packages"), [
-      clientIpHash,
+      quotaSubject,
       limits.perClient,
       limits.global,
       QUOTA_WINDOW_SECONDS,
@@ -481,8 +486,9 @@ export async function claimActionPackage(
       return { outcome: "denied", denial: decision };
     }
     const inserted = await client.query<{ id: string }>(
-      `insert into action_packages (scan_job_id, card_index, status, client_ip_hash) values ($1, $2, 'generating', $3) returning id`,
-      [scanJobId, cardIndex, clientIpHash],
+      `insert into action_packages (scan_job_id, card_index, status, client_ip_hash, quota_subject)
+       values ($1, $2, 'generating', $3, $4) returning id`,
+      [scanJobId, cardIndex, clientIpHash, quotaSubject],
     );
     await client.query("commit");
     return { outcome: "start", id: inserted.rows[0]!.id };

@@ -15,7 +15,9 @@ import { after, NextResponse } from "next/server";
 import { ipAddress } from "@vercel/functions";
 import { z } from "zod";
 import { claimActionPackage, getActionPackage, getScanJob, type ActionPackageState } from "@/lib/store";
-import { hashClientIp, readIpHashSecret, readPackageLimits } from "@/lib/rate-limit";
+import { hashClientIp, limitsFor, quotaSubject, readIpHashSecret, readPackageLimits, withSignInHint } from "@/lib/rate-limit";
+import { getSessionUser } from "@/lib/auth/server";
+import { readAuthConfig } from "@/lib/auth/config";
 import { runActionPackageJob } from "@/lib/build-package";
 import { packageStateBody } from "@/lib/package-response";
 
@@ -74,10 +76,12 @@ export async function POST(request: Request, context: Params): Promise<Response>
     const target = await resolveTarget(context);
     if (target instanceof Response) return target;
 
-    const claim = await claimActionPackage(target.id, target.index, clientIpHash, limits);
+    const user = await getSessionUser();
+    const subject = quotaSubject(user?.id, clientIpHash);
+    const claim = await claimActionPackage(target.id, target.index, clientIpHash, limitsFor(subject, limits), subject.key);
     if (claim.outcome === "denied") {
       return NextResponse.json(
-        { error: claim.denial.message },
+        { error: withSignInHint(claim.denial, subject.kind, readAuthConfig() !== null) },
         { status: 429, headers: { "Retry-After": String(claim.denial.retryAfterSeconds) } },
       );
     }
