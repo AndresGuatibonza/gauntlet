@@ -36,7 +36,7 @@ npm workspaces monorepo, TypeScript (ESM) throughout.
 packages/core   Framework-agnostic pipeline. No build step: package
                 exports point at src/index.ts and consumers compile it.
 packages/cli    Local CLI (`scan`, `analyze [--token-profiler]`) with SQLite storage.
-apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
+apps/web        Next.js 16 app on Vercel, Postgres (Supabase) storage.
 ```
 
 **`packages/core`**
@@ -75,7 +75,7 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `app/api/scans/[id]/cards/[index]/package/route.ts` | `POST` starts (or returns) the card's implementation package; `GET` for polling. |
 | `lib/build-package.ts` | Background package generation inside `after()`; every failure ends in `failed` with a plain message. |
 | `components/action-package-panel.tsx` | The brief inside a card: progress line, then the package with "Copy prompt for your coding agent" and "Download brief (.md)". |
-| `middleware.ts` | Refreshes the Supabase session on page requests (no-op without auth configured). |
+| `proxy.ts` | Next 16's proxy (formerly middleware): refreshes the Supabase session on page requests (no-op without auth configured). |
 | `lib/auth/` | `config.ts` (optional auth config, same-site redirect guard), `server.ts` (`getSessionUser()` via `getClaims()`), `browser.ts`. |
 | `app/signup/page.tsx`, `components/sign-in-panel.tsx` | Sign in with GitHub; returns to the report the visitor came from. |
 | `app/auth/callback/route.ts`, `app/auth/signout/route.ts` | OAuth code exchange (+ `signup_completed`), sign-out (POST only). |
@@ -595,15 +595,17 @@ expected to be clean.
 | Prompt fingerprint instead of a version number | A SHA-256 prefix of the system prompt changes with any edit, so an output is always traceable to its exact prompt; nobody has to remember to bump a version. |
 | Usage written per call, best-effort, plus a log line | A job that dies halfway still leaves its calls; accounting can never fail or block the job it describes; the log keeps the numbers if the write fails. |
 | Tokens stored, cost estimated | Prices change and the table is maintained by hand; tokens allow recomputing, and an unknown model gets no estimate instead of a wrong one. |
+| Next 16 with webpack, not Turbopack | Keeps the `.js` → `.ts` resolution (`extensionAlias`) the whole monorepo relies on; Next documents `--webpack` as the opt-out. |
 | `@gauntlet/core` has no build step | Next.js transpiles it (`transpilePackages`); one source of truth for CLI and web. |
 
 ## 10. Known limitations and risks
 
-1. **Dependency advisories**: `npm audit` reports 7. Six are dev-only
-   tooling (vitest, vite, esbuild) that affect local dev servers, not the
-   deployed app; one is Next.js via postcss (build-time CSS processing).
-   All fixes need major upgrades (Next 16, Vitest 5); do them as one
-   planned upgrade, never `npm audit fix --force`.
+1. **Bundler**: the web app builds with webpack (`--webpack` in its dev
+   and build scripts) because Turbopack, the Next 16 default, does not
+   resolve `@gauntlet/core`'s NodeNext `.js` specifiers. Moving to
+   Turbopack means extensionless imports in core (or a Turbopack resolver
+   option, should one appear). `npm audit` reports 0 advisories
+   (2026-10-07: Next 16, Vitest 5, esbuild 0.28).
 2. **Retention of event IP hashes**: `scan_events.client_ip_hash` is kept
    until its scan is deleted (180 days), because it is part of the
    per-client dedupe key; clearing it early could merge distinct visitors'

@@ -4,8 +4,8 @@
   "private": true,
   "description": "Gauntlet Pre-auth Report UI (Build Order #3, PRD \u00a78.5) -- paste a public URL, no account required, get ranked Opportunity Cards. Async job pattern: POST /api/scans creates a job and returns immediately; the pipeline runs via Next.js after() so it keeps going past the response (PRD \u00a79's \"Scan API / Job Manager... return status\").",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -19,7 +19,7 @@
     "@supabase/supabase-js": "^2.117.2",
     "@vercel/functions": "^3.0.0",
     "framer-motion": "^11.11.17",
-    "next": "^15.1.0",
+    "next": "^16.4.0",
     "pg": "^8.13.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -34,6 +34,6 @@
     "jsdom": "^25.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4",
-    "vitest": "^2.0.5"
+    "vitest": "^5.0.3"
   }
 }

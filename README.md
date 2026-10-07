@@ -309,7 +309,7 @@ Optional; without the two `NEXT_PUBLIC_SUPABASE_*` variables the app runs
 without accounts, exactly as before. With them:
 
 - **Sign in** (`/signup`, header) uses Supabase Auth with GitHub only
-  (OAuth + PKCE; session in cookies, refreshed by `middleware.ts`; the
+  (OAuth + PKCE; session in cookies, refreshed by `proxy.ts`; the
   server trusts only `getClaims()`, which verifies the token). Gauntlet
   asks for the public profile only, never repository access. Email sign-in
   is deliberately off: Supabase's built-in email service only delivers to
@@ -737,11 +737,10 @@ select
 2. Build Order #4 (GitHub deep scan) is built (repo-aware briefs, above).
    Next in the PRD is #6, the first production data adapter (PostHog by
    default), which the concierge round should choose (contract §6).
-3. `npm audit` reports 7 advisories (as of 2026-09-28). Six are in
-   dev-only tooling (vitest/vite/esbuild -- affect local dev/test
-   servers, not the deployed app); one is Next via postcss (build-time
-   CSS processing of attacker-controlled CSS; our CSS is our own). All
-   fixes need major upgrades (Vitest 5, Next 16) -- do them as a
-   planned upgrade, never `npm audit fix --force`.
+3. Dependencies: upgraded 2026-10-07 to Next 16, Vitest 5 and esbuild
+   0.28; `npm audit` reports 0 advisories. The web app builds with
+   webpack (`next build --webpack`, `next dev --webpack`): Turbopack, the
+   Next 16 default, does not resolve `@gauntlet/core`'s NodeNext-style
+   `.js` import specifiers. Vitest 5 needs Node 22.12+ locally.
 4. Other PRD §18 open questions still unanswered. Data retention is
    decided: IP hashes 48 h, scans 180 days (see "Deploying to Vercel").

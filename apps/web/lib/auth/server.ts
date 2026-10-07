@@ -30,7 +30,7 @@ export async function createSupabaseServerClient(): Promise<SupabaseClient | nul
         try {
           for (const { name, value, options } of toSet) cookieStore.set(name, value, options);
         } catch {
-          // Server Components can't set cookies; the middleware refreshes the session instead.
+          // Server Components can't set cookies; the proxy (proxy.ts) refreshes the session instead.
         }
       },
     },

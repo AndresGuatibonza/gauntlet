@@ -1,4 +1,7 @@
 /**
+ * Next.js proxy (the file convention that replaced middleware in Next 16;
+ * it always runs on the Node.js runtime).
+ *
  * Keeps the Supabase session fresh: on each page request, getClaims()
  * refreshes an expiring access token and the new cookies are written to
  * both the request (for this render) and the response (for the browser).
@@ -13,7 +16,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { readAuthConfig } from "@/lib/auth/config";
 
-export async function middleware(request: NextRequest): Promise<NextResponse> {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   let response = NextResponse.next({ request });
   const config = readAuthConfig();
   if (!config) return response;
@@ -33,7 +36,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     await supabase.auth.getClaims();
   } catch (err) {
     // An unreachable Auth server must not take pages down; the visitor is treated as signed out.
-    console.error("[middleware] session refresh failed:", err);
+    console.error("[proxy] session refresh failed:", err);
   }
   return response;
 }

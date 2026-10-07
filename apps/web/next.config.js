@@ -6,6 +6,10 @@ const nextConfig = {
   // Next's own compiler to transpile it rather than treating it as
   // pre-built, external code.
   transpilePackages: ["@gauntlet/core"],
+  // Next 16 builds with Turbopack by default, but Turbopack has no
+  // equivalent of the extensionAlias below, so @gauntlet/core's ".js"
+  // specifiers don't resolve under it. package.json's dev and build
+  // scripts pass --webpack to keep this resolver (Next's documented opt-out).
   webpack: (config) => {
     // Our own relative imports (lib/run-scan.ts importing "./store.js", for
     // example) follow TypeScript's NodeNext convention: an ESM import
