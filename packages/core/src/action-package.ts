@@ -25,7 +25,7 @@
 import { z } from "zod";
 import type { EvidencePacket } from "./evidence-packet.js";
 import type { RepoAnalysis } from "./repo-analysis.js";
-import { isPopulatedAiEvidence } from "./evidence-packet.js";
+import { isPopulatedAiEvidence, isPopulatedBehaviorEvidence } from "./evidence-packet.js";
 import { LlmCallError, type LlmClient, type LlmMessage } from "./llm-client.js";
 import { ExperimentSchema, ChangeSurfaceSchema, type OpportunityCard } from "./opportunity-card.js";
 
@@ -147,11 +147,16 @@ function isInspectedPath(path: string, inspected: readonly string[]): boolean {
   return false;
 }
 
-/** The card's own cited evidence, resolved against the packet (E* and A* items). */
+/** The card's own cited evidence, resolved against the packet (E*, B* and A* items). */
 export function citedEvidenceFor(card: OpportunityCard, packet: EvidencePacket): CitedEvidence[] {
   const byId = new Map<string, CitedEvidence>();
   for (const item of packet.observedEvidence) {
     byId.set(item.id, { id: item.id, observation: item.observation, sourceRef: item.sourceUrl });
+  }
+  if (isPopulatedBehaviorEvidence(packet.behaviorEvidence)) {
+    for (const item of packet.behaviorEvidence.items) {
+      byId.set(item.id, { id: item.id, observation: item.observation, sourceRef: item.sourceRef });
+    }
   }
   if (isPopulatedAiEvidence(packet.aiEvidence)) {
     for (const item of packet.aiEvidence.items) {

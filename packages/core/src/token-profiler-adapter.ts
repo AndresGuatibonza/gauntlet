@@ -28,6 +28,8 @@ import {
   type EvidencePacket,
   type PopulatedAiEvidence,
   isPopulatedAiEvidence,
+  isPopulatedBehaviorEvidence,
+  sourceReliabilityFor,
 } from "./evidence-packet.js";
 
 export class TokenProfilerError extends Error {
@@ -526,7 +528,9 @@ function notEvaluableChecks(snapshot: TokenProfilerSnapshot, fired: Map<string, 
 
 /**
  * Returns a NEW packet with aiEvidence populated (the public-scan packet is
- * never modified), sourceReliability raised to "public_scan_plus_ai_traces",
+ * never modified), sourceReliability raised to include AI traces
+ * ("public_scan_plus_ai_traces", or "..._behavior_and_ai_traces" when the
+ * packet already has behavior evidence),
  * and the AI coverage limits added to missingEvidenceSummary (§1.8).
  */
 export function attachAiEvidence(packet: EvidencePacket, aiEvidence: PopulatedAiEvidence): EvidencePacket {
@@ -547,7 +551,7 @@ export function attachAiEvidence(packet: EvidencePacket, aiEvidence: PopulatedAi
     aiEvidence,
     confidenceMetadata: {
       ...packet.confidenceMetadata,
-      sourceReliability: "public_scan_plus_ai_traces",
+      sourceReliability: sourceReliabilityFor(isPopulatedBehaviorEvidence(packet.behaviorEvidence), true),
       missingEvidenceSummary: existing ? `${/[.!?]$/.test(existing) ? existing : `${existing}.`} ${coverage}` : coverage,
     },
   };

@@ -21,7 +21,7 @@
  * dropped before the product sees the report -- never silently shipped as-is."
  */
 import { z } from "zod";
-import { isPopulatedAiEvidence, type EvidencePacket } from "./evidence-packet.js";
+import { isPopulatedAiEvidence, isPopulatedBehaviorEvidence, type EvidencePacket } from "./evidence-packet.js";
 import { CardConfidenceSchema, computeRankScore, type OpportunityCard, type OpportunityReport } from "./opportunity-card.js";
 import { type LlmClient, type LlmMessage, LlmCallError } from "./llm-client.js";
 
@@ -71,7 +71,7 @@ export interface ReviewedOpportunityReport {
 const SYSTEM_PROMPT = `You are the Peer Reviewer / Experiment Critic for Gauntlet. You are given an Evidence Packet and a set of Opportunity Cards a separate Scientist component already generated from it. Your job is to critique each card against this checklist -- you do not generate new opportunities, and you never add evidence the packet does not contain.
 
 For EVERY card, answer all four checklist questions and give a verdict:
-1. outrunsEvidence: does the card's problemStatement/hypothesis claim more than what evidenceRefs actually supports? This includes treating partial trace coverage (aiEvidence.source's window and connectors, or a check listed in aiEvidence.notEvaluable) as if it were complete.
+1. outrunsEvidence: does the card's problemStatement/hypothesis claim more than what evidenceRefs actually supports? This includes treating partial coverage as if it were complete: aiEvidence.source's window and connectors, behaviorEvidence.source's window and tracked events, or a check listed in either notEvaluable list.
 2. hasUnaddressedConfounder: is there an obvious alternative explanation for the observation that the card ignores?
 3. metricMatchesOutcome: does experiment.primaryMetric actually measure the outcome named in problemStatement? (false = mismatch)
 4. isFalsifiableAndSingleChange: is the experiment falsifiable and does it change exactly one thing? (false = not falsifiable, or bundles multiple changes)
@@ -107,7 +107,10 @@ function buildUserPrompt(report: OpportunityReport, packet: EvidencePacket): str
   const aiEvidence = isPopulatedAiEvidence(packet.aiEvidence)
     ? `\n\nAI evidence from the product's own traces (cards may cite these A* ids):\n${JSON.stringify(packet.aiEvidence, null, 2)}`
     : "";
-  return `Evidence Packet (for context on what evidence actually exists):\n${JSON.stringify(packet.observedEvidence, null, 2)}${aiEvidence}\n\nOpportunity Cards to review:\n${JSON.stringify(report.cards, null, 2)}\n\nReview every card now, following the checklist exactly.`;
+  const behavior = isPopulatedBehaviorEvidence(packet.behaviorEvidence)
+    ? `\n\nBehavior evidence from the product's own analytics (cards may cite these B* ids):\n${JSON.stringify(packet.behaviorEvidence, null, 2)}`
+    : "";
+  return `Evidence Packet (for context on what evidence actually exists):\n${JSON.stringify(packet.observedEvidence, null, 2)}${behavior}${aiEvidence}\n\nOpportunity Cards to review:\n${JSON.stringify(report.cards, null, 2)}\n\nReview every card now, following the checklist exactly.`;
 }
 
 function extractJsonPayload(raw: string): string {

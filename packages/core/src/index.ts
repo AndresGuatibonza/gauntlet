@@ -13,6 +13,8 @@ export * from "./llm-pricing.js";
 export * from "./scientist.js";
 export * from "./reviewer.js";
 export * from "./token-profiler-adapter.js";
+export * from "./behavior-evidence.js";
+export * from "./posthog-source.js";
 export * from "./action-package.js";
 export * from "./repo-evidence.js";
 export * from "./repo-analysis.js";

@@ -51,6 +51,8 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 | `token-profiler-adapter.ts` | Contract §1.6. `readTokenProfiler()` reads a local Token Profiler's HTTP API (sessions, events, flags, context analysis), validating every response. `buildAiEvidence()` deterministically maps it to `aiEvidence` items (usage profile, failure rate, one item per fired flag, context repetition) plus a `notEvaluable` list. `attachAiEvidence()` returns an enriched copy of a packet. |
 | `opportunity-card.ts` | Zod schema for cards and reports; `computeRankScore = impact × evidenceQuality ÷ effort` (each 1–3). |
 | `llm-client.ts` | Anthropic SDK wrapper. Model `claude-sonnet-5`, `max_tokens` 16000 (the model spends part of the budget on thinking before the text block; 4096 truncated real responses). Honors `NODE_EXTRA_CA_CERTS` for TLS-intercepting networks. Each call carries its pipeline step (`purpose`); an optional `onUsage` callback receives one `LlmUsage` per call (served model, `promptFingerprint` of the system prompt, tokens, stop reason, duration, ok), including billed responses without text and transport failures. |
+| `behavior-evidence.ts` | Contract §1.4 (Amendment 4, draft). Vendor-neutral `BehaviorSnapshot` and `BehaviorSource` interface, query validation, `buildBehaviorEvidence()` (deterministic B* items: event volume, one per funnel, experiment and flag inventories, plus `notEvaluable`), `attachBehaviorEvidence()`. |
+| `posthog-source.ts` | Read-only PostHog reader: HogQL event totals and top events, `FunnelsQuery` per funnel, experiments and feature-flag lists (optional scopes); typed errors; pagination only on the configured host; no person data requested. |
 | `llm-pricing.ts` | Estimated cost: USD per million tokens per model (`MODEL_PRICES`, dated by `PRICES_AS_OF`); a dated snapshot prices like its alias; unknown models get no estimate. Observability only, never billing. |
 | `scientist.ts` | First Claude call. Must return 3–5 cards, exactly one `build_this`, and cite only evidence ids that exist in the packet (E*, and A* when the packet carries AI evidence). Invalid output gets one corrective retry with the exact validation error. Cards are ranked by `rankScore`. |
 | `action-package.ts` | "Build this" (contract §2.2–§2.3). `generateActionPackage()`: one Claude call (+1 corrective retry) writes the engineering parts; the card's hypothesis, experiment and cited evidence are copied in verbatim; rejects evidence the card doesn't cite and file-path-like components. `renderCodingAgentPrompt()` / `renderActionPackageMarkdown()`: templates over the validated package. `planExperimentRecord()` and `ExperimentRecordSchema` (ledger rules). |
@@ -107,6 +109,7 @@ apps/web        Next.js 15 app on Vercel, Postgres (Supabase) storage.
 |---|---|
 | `src/index.ts` | `scan` and `analyze` commands. |
 | `src/ledger.ts` | `gauntlet build` (package + planned ledger record, never generated twice for a card) and `gauntlet ledger` / `ledger record` (transition rules). |
+| `src/posthog-option.ts` | `--posthog` flags and environment → a validated read (window, funnels; key only from the environment), and the enrichment step that saves the new packet. |
 | `src/token-profiler-option.ts` | `--token-profiler` flags → a validated query (window, connectors; coding-agent connectors refused), and the enrichment step that saves the new packet. |
 | `src/store/sqlite.ts` | SQLite store with inline, tracked migrations (`001_init`, `002_opportunity_reports`, `003_packet_lineage`). |
 
@@ -199,6 +202,30 @@ limit is 300 s (`maxDuration` on the Hobby plan).
    Reviewer then run on the new packet; both see the AI evidence and its
    `notEvaluable` list, and the Reviewer's first checklist question fails a
    card that treats partial trace coverage as complete.
+
+### Adding product analytics (CLI only, draft)
+
+`gauntlet analyze <packetId> --posthog [--ph-since] [--ph-until] [--ph-funnel "name[:Nd]=a>b>c"]`,
+with `POSTHOG_PERSONAL_API_KEY`, `POSTHOG_PROJECT_ID` and optional
+`POSTHOG_HOST` in the environment (contract Amendment 4, draft):
+
+1. The window and funnels are validated (≤90 days, ≤5 funnels of 2–6 event
+   names) before the store is opened or any request is made.
+2. `posthog-source.ts` reads totals and the 25 most frequent events (HogQL),
+   each funnel (`FunnelsQuery`), and the experiment and feature-flag lists.
+   A 403 on an inventory makes it "not evaluable"; any other failure stops
+   the run before Claude.
+3. `buildBehaviorEvidence()` maps the snapshot to B* items and
+   `notEvaluable`; `attachBehaviorEvidence()` saves an enriched copy
+   (`sourceReliability` `public_scan_plus_behavior`, or
+   `..._behavior_and_ai_traces` together with `--token-profiler`), with the
+   coverage limits added to `missingEvidenceSummary`.
+4. The Scientist may cite B* ids (prefer them over surface inferences, never
+   duplicate a running experiment); the Reviewer judges partial coverage.
+
+Adding Amplitude or Pendo means one more `BehaviorSource`; nothing
+downstream changes. The web app does not read analytics yet (credential
+storage and funnel choice are PRD decisions).
 
 ### "Build this" (implementation package + ledger record)
 
@@ -477,7 +504,7 @@ intent, `wrong` ratings as a proxy for false confidence).
 ## 8. Testing
 
 `npm test` at the repo root runs all three workspaces (about 400 tests:
-CLI 35, core 160, web 211), plus 46 database integration tests. `npm run typecheck` and `npm run lint` are
+CLI 41, core 179, web 220), plus 51 database integration tests. `npm run typecheck` and `npm run lint` are
 expected to be clean.
 
 - `packages/core`: fetcher, discovery, extractor, normalizer, Scientist,
@@ -624,5 +651,8 @@ expected to be clean.
    signup-equivalent ≥20%, false confidence <10%).
 2. Resolve the PRD §18 questions the validation raises, starting with
    supported product categories (data retention is decided; see §7).
-3. Build Order #6 (first production data adapter; PostHog by default), chosen
-   by what the concierge round shows (contract §6).
+3. Build Order #6 (first production data adapter): the PostHog adapter is
+   built in core and the CLI (contract Amendment 4, draft) and has not run
+   against a live project yet. Pending the PRD: confirm the source, the web
+   connection and credential storage, how funnels are chosen, and whether
+   experiment results are read.

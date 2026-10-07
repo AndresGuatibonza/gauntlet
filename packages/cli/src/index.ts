@@ -25,6 +25,8 @@ import {
   type OpportunityReport,
   TokenProfilerError,
   isPopulatedAiEvidence,
+  isPopulatedBehaviorEvidence,
+  BehaviorSourceError,
   ActionPackageError,
   ExperimentUpdateError,
   renderActionPackageMarkdown,
@@ -38,6 +40,13 @@ import {
   resolveTokenProfilerQuery,
   type TokenProfilerCliOptions,
 } from "./token-profiler-option.js";
+import {
+  DEFAULT_PH_WINDOW_DAYS,
+  enrichPacketWithBehavior,
+  printBehaviorSummary,
+  resolvePostHogRun,
+  type PostHogCliOptions,
+} from "./posthog-option.js";
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -180,7 +189,14 @@ program
   .option("--tp-connector <name>", "Token Profiler connector holding the product's traces (repeatable; required with --token-profiler)", collect, [])
   .option("--tp-since <date>", `Include sessions that started at/after this ISO date or timestamp (default: ${DEFAULT_TP_WINDOW_DAYS} days before --tp-until)`)
   .option("--tp-until <date>", "Include sessions that started at/before this ISO date (whole day) or timestamp (default: now)")
-  .action(async (packetIdArg: string, opts: { db: string; out?: string } & TokenProfilerCliOptions) => {
+  .option(
+    "--posthog",
+    "Add the product's own analytics from PostHog (needs POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID; POSTHOG_HOST optional); saves an enriched copy of the packet",
+  )
+  .option("--ph-since <date>", `Analytics window start, ISO date or timestamp (default: ${DEFAULT_PH_WINDOW_DAYS} days before --ph-until)`)
+  .option("--ph-until <date>", "Analytics window end, ISO date (whole day) or timestamp (default: now)")
+  .option("--ph-funnel <spec>", 'Funnel to measure, "name=event_a>event_b[>...]" or "name:7d=..." (repeatable, up to 5)', collect, [])
+  .action(async (packetIdArg: string, opts: { db: string; out?: string } & TokenProfilerCliOptions & PostHogCliOptions) => {
     const requestedPacketId = Number.parseInt(packetIdArg, 10);
     if (!Number.isFinite(requestedPacketId) || requestedPacketId < 1) {
       console.error("Error: <packetId> must be a positive integer.");
@@ -188,10 +204,12 @@ program
       return;
     }
 
-    // Validate the Token Profiler flags before touching the store.
+    // Validate the Token Profiler and PostHog flags before touching the store.
     let tpQuery;
+    let phRun;
     try {
       tpQuery = resolveTokenProfilerQuery(opts);
+      phRun = resolvePostHogRun(opts);
     } catch (err) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exitCode = 1;
@@ -223,13 +241,35 @@ program
     // stays as it was. Any Token Profiler failure stops here, before Claude.
     let packetId = requestedPacketId;
     let packet = sourcePacket;
+    // Amendment 4 (draft): behavior evidence first, so a run with both
+    // sources analyzes one packet carrying both. Any failure stops before Claude.
+    if (phRun) {
+      console.log(
+        `Reading PostHog at ${phRun.host} (project ${phRun.projectId}; ${phRun.query.from} to ${phRun.query.to}; ${phRun.query.funnels.length} funnel(s))...`,
+      );
+      try {
+        const enrichment = await enrichPacketWithBehavior(store, packetId, packet, phRun);
+        printBehaviorSummary(enrichment, packetId);
+        packetId = enrichment.packetId;
+        packet = enrichment.packet;
+      } catch (err) {
+        console.error(
+          err instanceof BehaviorSourceError
+            ? `PostHog error: ${err.message}`
+            : `PostHog error (unexpected): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        store.close();
+        process.exitCode = 1;
+        return;
+      }
+    }
     if (tpQuery) {
       console.log(
         `Reading Token Profiler at ${tpQuery.baseUrl} (connector(s): ${tpQuery.connectors.join(", ")}; sessions started ${tpQuery.since} to ${tpQuery.until})...`,
       );
       try {
-        const enrichment = await enrichPacketWithTokenProfiler(store, requestedPacketId, sourcePacket, tpQuery);
-        printAiEvidenceSummary(enrichment, requestedPacketId);
+        const enrichment = await enrichPacketWithTokenProfiler(store, packetId, packet, tpQuery);
+        printAiEvidenceSummary(enrichment, packetId);
         packetId = enrichment.packetId;
         packet = enrichment.packet;
       } catch (err) {
@@ -254,7 +294,11 @@ program
       return;
     }
 
-    const aiNote = isPopulatedAiEvidence(packet.aiEvidence) ? ", public scan + AI traces" : "";
+    const sources = [
+      isPopulatedBehaviorEvidence(packet.behaviorEvidence) && "analytics",
+      isPopulatedAiEvidence(packet.aiEvidence) && "AI traces",
+    ].filter(Boolean);
+    const aiNote = sources.length > 0 ? `, public scan + ${sources.join(" + ")}` : "";
     console.log(`Running Product Scientist on Evidence Packet #${packetId} (${packet.productIdentity.productName}${aiNote})...`);
     let scientistReport;
     try {

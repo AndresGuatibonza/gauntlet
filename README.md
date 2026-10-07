@@ -553,6 +553,39 @@ so far in Build Order #3, for two different underlying reasons).
    public CA list) rather than relying on `fetch`/undici to honor the env
    var on every internal code path, which isn't guaranteed.
 
+#### Adding the product's own analytics (PostHog, draft)
+
+Build Order #6 groundwork, ahead of the PRD that confirms the first
+production data adapter (contract Amendment 4, draft: §1.4 behavior
+evidence). `analyze` can add aggregates from the product's own PostHog
+project. Credentials come from the environment only, never flags:
+
+```
+set POSTHOG_PERSONAL_API_KEY=phx_...
+set POSTHOG_PROJECT_ID=12345
+node packages/cli/dist/index.cjs analyze 1 --db ./gauntlet.db --posthog --ph-since 2026-09-01 --ph-until 2026-09-30 --ph-funnel "activation=$pageview>signed_up>scan_started"
+```
+
+The personal API key needs the `query:read` scope (`experiment:read` and
+`feature_flag:read` are optional). The project id is under Project
+settings. `POSTHOG_HOST` is optional (default `https://us.posthog.com`; EU
+cloud is `https://eu.posthog.com`).
+
+- Reads: event totals and the 25 most frequent events, each `--ph-funnel`
+  (repeatable, up to 5, 2–6 steps, `name:7d=...` for a 7-day conversion
+  window; default 14), and the experiment and feature-flag inventories.
+  Never persons, distinct ids, property values or recordings.
+- `--ph-since` / `--ph-until`: ISO date (whole UTC day) or timestamp;
+  default the 30 days ending now; at most 90 days.
+- Packet `1` stays as it was; the run prints the new packet and its `B*`
+  items, then analyzes it. Combines with `--token-profiler` (both sources
+  in one packet). A missing optional scope is reported as not evaluable; a
+  bad key, wrong project or unreachable host stops the run before any
+  Claude call.
+- Not yet run against a live PostHog project. The web app does not read
+  analytics yet: how it stores credentials and which funnels it measures
+  are open decisions for the PRD.
+
 ### Web app (`apps/web`, Build Order #3)
 
 **Validated end-to-end** against a real Supabase project and a real scan.

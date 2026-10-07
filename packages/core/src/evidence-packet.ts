@@ -73,13 +73,78 @@ export const EvidenceItemSchema = z.object({
 export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
 
 // ---------------------------------------------------------------------------
-// §1.4, §1.5, §1.7 Reserved field groups -- not populated yet. Present but
-// empty, per the contract's own instruction, so the Scientist's input shape
-// never has to change once these become real (analytics / observability /
-// repo adapters, Build Order #4+).
+// §1.5, §1.7 Reserved field groups -- present but empty in the public
+// packet, per the contract's own instruction, so the Scientist's input shape
+// never has to change once these become real.
 // ---------------------------------------------------------------------------
 export const ReservedEmptySchema = z.object({}).strict();
 export type ReservedEmpty = z.infer<typeof ReservedEmptySchema>;
+
+// ---------------------------------------------------------------------------
+// §1.4 Behavior evidence (contract Amendment 4, draft). Empty ({}) in every
+// public-scan packet; populated from a product-analytics source (PostHog
+// first, see posthog-source.ts and behavior-evidence.ts). Items are citable
+// like §1.3 items, with ids B1, B2... that never collide with E*, A* or C*.
+// Aggregates only: event names and counts, funnel step counts, experiment
+// and feature-flag inventories. Never people, distinct ids or properties.
+// ---------------------------------------------------------------------------
+export const BehaviorEvidenceTypeSchema = z.enum([
+  "event_volume",
+  "funnel_conversion",
+  "experiment_inventory",
+  "feature_flag_inventory",
+]);
+export type BehaviorEvidenceType = z.infer<typeof BehaviorEvidenceTypeSchema>;
+
+export const BehaviorEvidenceItemSchema = z
+  .object({
+    id: z.string().regex(/^B[1-9]\d*$/, 'Behavior evidence ids are "B1", "B2", ...'),
+    sourceRef: z.string().min(1),
+    timestamp: z.string().datetime(),
+    evidenceType: BehaviorEvidenceTypeSchema,
+    observation: z.string().min(1),
+    rawExcerpt: z.string(),
+    // Deterministic aggregates only, so never "low". "medium" marks figures
+    // resting on a small sample (see behavior-evidence.ts).
+    confidence: z.enum(["high", "medium"]),
+  })
+  .strict();
+export type BehaviorEvidenceItem = z.infer<typeof BehaviorEvidenceItemSchema>;
+
+/** Analytics systems with an adapter. Amplitude/Pendo would be added here. */
+export const BehaviorSystemSchema = z.enum(["posthog"]);
+export type BehaviorSystem = z.infer<typeof BehaviorSystemSchema>;
+
+export const BehaviorEvidenceSourceSchema = z
+  .object({
+    system: BehaviorSystemSchema,
+    /** The analytics instance, e.g. https://us.posthog.com (never a key). */
+    host: z.string().url(),
+    project: z.string().min(1),
+    window: z.object({ from: z.string().datetime(), to: z.string().datetime() }).strict(),
+    /** Every event in the window, all names. */
+    eventCount: z.number().int().nonnegative(),
+    pulledAt: z.string().datetime(),
+  })
+  .strict();
+export type BehaviorEvidenceSource = z.infer<typeof BehaviorEvidenceSourceSchema>;
+
+export const PopulatedBehaviorEvidenceSchema = z
+  .object({
+    source: BehaviorEvidenceSourceSchema,
+    items: z.array(BehaviorEvidenceItemSchema).min(1),
+    // Checks that could not run for this data. Never "no problem found".
+    notEvaluable: z.array(z.string()),
+  })
+  .strict();
+export type PopulatedBehaviorEvidence = z.infer<typeof PopulatedBehaviorEvidenceSchema>;
+
+export const BehaviorEvidenceSchema = z.union([PopulatedBehaviorEvidenceSchema, ReservedEmptySchema]);
+export type BehaviorEvidence = z.infer<typeof BehaviorEvidenceSchema>;
+
+export function isPopulatedBehaviorEvidence(value: BehaviorEvidence): value is PopulatedBehaviorEvidence {
+  return "items" in value;
+}
 
 // ---------------------------------------------------------------------------
 // §1.6 AI evidence (contract Amendment 1). Empty ({}) in every public-scan
@@ -139,7 +204,21 @@ export function isPopulatedAiEvidence(value: AiEvidence): value is PopulatedAiEv
 // ---------------------------------------------------------------------------
 // §1.8 Confidence metadata (packet-level)
 // ---------------------------------------------------------------------------
-export const SourceReliabilitySchema = z.enum(["public_scan_only", "public_scan_plus_ai_traces"]);
+export const SourceReliabilitySchema = z.enum([
+  "public_scan_only",
+  "public_scan_plus_ai_traces",
+  "public_scan_plus_behavior",
+  "public_scan_plus_behavior_and_ai_traces",
+]);
+export type SourceReliability = z.infer<typeof SourceReliabilitySchema>;
+
+/** The one sourceReliability value that matches which evidence groups a packet carries. */
+export function sourceReliabilityFor(hasBehavior: boolean, hasTraces: boolean): SourceReliability {
+  if (hasBehavior && hasTraces) return "public_scan_plus_behavior_and_ai_traces";
+  if (hasBehavior) return "public_scan_plus_behavior";
+  if (hasTraces) return "public_scan_plus_ai_traces";
+  return "public_scan_only";
+}
 
 export const ConfidenceMetadataSchema = z.object({
   sourceReliability: SourceReliabilitySchema,
@@ -162,28 +241,28 @@ export const EvidencePacketSchema = z
     productIdentity: ProductIdentitySchema,
     surfaceMap: SurfaceMapSchema,
     observedEvidence: z.array(EvidenceItemSchema),
-    behaviorEvidence: ReservedEmptySchema,
+    behaviorEvidence: BehaviorEvidenceSchema,
     reliabilityEvidence: ReservedEmptySchema,
     aiEvidence: AiEvidenceSchema,
     codeContext: ReservedEmptySchema,
     confidenceMetadata: ConfidenceMetadataSchema,
   })
   .superRefine((packet, ctx) => {
-    // sourceReliability must say whether trace evidence is present, so a
-    // reader (or the Scientist) can never mistake one kind of packet for
-    // the other.
+    // sourceReliability must say exactly which evidence groups are present,
+    // so a reader (or the Scientist) can never mistake one kind of packet
+    // for another.
     const hasTraces = isPopulatedAiEvidence(packet.aiEvidence);
-    const declared = packet.confidenceMetadata.sourceReliability;
-    if (hasTraces !== (declared === "public_scan_plus_ai_traces")) {
+    const hasBehavior = isPopulatedBehaviorEvidence(packet.behaviorEvidence);
+    const expected = sourceReliabilityFor(hasBehavior, hasTraces);
+    if (packet.confidenceMetadata.sourceReliability !== expected) {
+      const present = [hasBehavior && "behaviorEvidence", hasTraces && "aiEvidence"].filter(Boolean).join(" and ") || "no connected evidence";
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["confidenceMetadata", "sourceReliability"],
-        message: hasTraces
-          ? 'A packet with populated aiEvidence must declare sourceReliability "public_scan_plus_ai_traces".'
-          : 'sourceReliability "public_scan_plus_ai_traces" requires populated aiEvidence.',
+        message: `A packet with ${present} must declare sourceReliability "${expected}".`,
       });
     }
-    // Every citable id must be unique across §1.3 and §1.6.
+    // Every citable id must be unique across §1.3, §1.4 and §1.6.
     const seen = new Set<string>();
     for (const id of citableEvidenceIds(packet)) {
       if (seen.has(id)) {
@@ -196,11 +275,18 @@ export type EvidencePacket = z.infer<typeof EvidencePacketSchema>;
 
 /**
  * Every id an Opportunity Card may cite in evidenceRefs: §1.3 items (E*)
- * plus, when present, §1.6 AI evidence items (A*). Returned as an array (in
- * packet order) so duplicates stay detectable.
+ * plus, when present, §1.4 behavior items (B*) and §1.6 AI evidence items
+ * (A*). Returned as an array (in packet order) so duplicates stay
+ * detectable. behaviorEvidence is optional in the argument so callers
+ * holding only the older two groups still work.
  */
-export function citableEvidenceIds(packet: Pick<EvidencePacket, "observedEvidence" | "aiEvidence">): string[] {
+export function citableEvidenceIds(
+  packet: Pick<EvidencePacket, "observedEvidence" | "aiEvidence"> & { behaviorEvidence?: BehaviorEvidence },
+): string[] {
   const ids = packet.observedEvidence.map((item) => item.id);
+  if (packet.behaviorEvidence && isPopulatedBehaviorEvidence(packet.behaviorEvidence)) {
+    ids.push(...packet.behaviorEvidence.items.map((item) => item.id));
+  }
   if (isPopulatedAiEvidence(packet.aiEvidence)) ids.push(...packet.aiEvidence.items.map((item) => item.id));
   return ids;
 }
